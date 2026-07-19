@@ -221,8 +221,13 @@ fun ScannerScreen(onDetected: (String) -> Unit, onBack: () -> Unit) {
     var hasPermission by remember { mutableStateOf(ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) }
     val launcher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { hasPermission = it }
     LaunchedEffect(Unit) { if (!hasPermission) launcher.launch(Manifest.permission.CAMERA) }
+
+    var camera by remember { mutableStateOf<androidx.camera.core.Camera?>(null) }
+    var torchOn by remember { mutableStateOf(false) }
+    val hasTorch = camera?.cameraInfo?.hasFlashUnit() == true
+
     Box(Modifier.fillMaxSize().background(Color.Black)) {
-        if (hasPermission) CameraPreview(onDetected)
+        if (hasPermission) CameraPreview(onDetected) { camera = it }
         else Column(Modifier.align(Alignment.Center), horizontalAlignment = Alignment.CenterHorizontally) {
             Text("Se necesita permiso de camara", color = Color.White)
             Spacer(Modifier.height(12.dp))
@@ -239,11 +244,25 @@ fun ScannerScreen(onDetected: (String) -> Unit, onBack: () -> Unit) {
         }
         Text("Apunta al codigo de barras", color = Color.White, modifier = Modifier.align(Alignment.Center).offset(y = 120.dp))
         IconButton(onClick = onBack, modifier = Modifier.padding(16.dp).statusBarsPadding()) { Icon(Icons.Filled.ArrowBack, null, tint = Color.White) }
+
+        // Boton de flash
+        if (hasTorch) {
+            Box(
+                Modifier.align(Alignment.BottomCenter).padding(bottom = 48.dp)
+                    .size(64.dp).clip(CircleShape)
+                    .background(if (torchOn) Lima else Color.White.copy(alpha = 0.2f))
+                    .clickable { torchOn = !torchOn; camera?.cameraControl?.enableTorch(torchOn) },
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(if (torchOn) Icons.Filled.FlashOn else Icons.Filled.FlashOff, "Flash",
+                    tint = if (torchOn) Bosque else Color.White, modifier = Modifier.size(30.dp))
+            }
+        }
     }
 }
 
 @Composable
-fun CameraPreview(onDetected: (String) -> Unit) {
+fun CameraPreview(onDetected: (String) -> Unit, onCameraReady: (androidx.camera.core.Camera) -> Unit) {
     val lifecycleOwner = LocalLifecycleOwner.current
     var handled by remember { mutableStateOf(false) }
     AndroidView(factory = { ctx ->
@@ -269,7 +288,8 @@ fun CameraPreview(onDetected: (String) -> Unit) {
                     } else proxy.close()
                 }
                 provider.unbindAll()
-                provider.bindToLifecycle(lifecycleOwner, CameraSelector.DEFAULT_BACK_CAMERA, preview, analysis)
+                val cam = provider.bindToLifecycle(lifecycleOwner, CameraSelector.DEFAULT_BACK_CAMERA, preview, analysis)
+                onCameraReady(cam)
             }, ContextCompat.getMainExecutor(ctx))
         }
         previewView

@@ -15,7 +15,8 @@ data class Product(
     val quantity: String,
     val nutriScore: String?,      // a..e
     val novaGroup: Int?,          // 1..4
-    val category: String?,        // primera categoría OFF (tag)
+    val category: String?,        // categoría OFF más específica (tag)
+    val categoryTags: List<String>, // todas las categorías, de general a específica
     val categoryName: String?,
     val additives: List<AdditiveInfo>,
     val score: Int,               // 0..100
@@ -58,7 +59,8 @@ object Repo {
         val nutri = p.optString("nutriscore_grade").lowercase().takeIf { it in listOf("a","b","c","d","e") }
         val nova = p.optInt("nova_group", -1).takeIf { it in 1..4 }
         val catTags = p.optJSONArray("categories_tags")
-        val catTag = if (catTags != null && catTags.length() > 0) catTags.getString(catTags.length() - 1) else null
+        val catList = buildList { if (catTags != null) for (i in 0 until catTags.length()) add(catTags.getString(i)) }
+        val catTag = catList.lastOrNull()
         val catName = p.optString("categories").split(",").lastOrNull()?.trim()
 
         val additiveTags = p.optJSONArray("additives_tags")
@@ -106,38 +108,42 @@ object Repo {
         prot?.let { if (it >= 8) pos.add("Rico en proteínas (${fmt(it)} g/100g)") }
         kcal?.let { if (it > 450) neg.add("Muy calórico (${fmt(it)} kcal/100g)") }
 
-        Product(barcode, name, brand, img, p.optString("quantity"), nutri, nova, catTag, catName,
+        Product(barcode, name, brand, img, p.optString("quantity"), nutri, nova, catTag, catList, catName,
             additives, score, pos, neg, estimatePrice(catTag, p.optString("categories")),
             kcal, sugar, salt, sat, prot, fib)
     }
 
     suspend fun fetchAlternatives(product: Product): List<Alternative> = withContext(Dispatchers.IO) {
-        val cat = product.category ?: return@withContext emptyList()
         val myRank = nutriRank(product.nutriScore)
         val fields = "code,product_name,product_name_es,brands,image_front_url,nutriscore_grade"
-        // Primero con productos de España; si no hay, se busca a nivel mundial
-        val urls = listOf(
-            "https://world.openfoodfacts.org/api/v2/search?categories_tags=$cat&countries_tags=en:spain&sort_by=nutriscore_score&fields=$fields&page_size=25",
-            "https://world.openfoodfacts.org/api/v2/search?categories_tags=$cat&sort_by=nutriscore_score&fields=$fields&page_size=25"
-        )
+        // Se prueban las categorías de la más específica a la más general (las 3 últimas)
+        val cats = product.categoryTags.reversed().take(3).ifEmpty { listOfNotNull(product.category) }
+        if (cats.isEmpty()) return@withContext emptyList()
         val result = mutableListOf<Alternative>()
-        for (url in urls) {
-            val json = get(url) ?: continue
-            val arr = json.optJSONArray("products") ?: continue
-            for (i in 0 until arr.length()) {
-                val o = arr.getJSONObject(i)
-                val code = o.optString("code")
-                if (code == product.barcode || result.any { it.barcode == code }) continue
-                val ns = o.optString("nutriscore_grade").lowercase().takeIf { it in listOf("a","b","c","d","e") } ?: continue
-                // Solo alternativas con mejor Nutri-Score que el producto escaneado
-                if (nutriRank(ns) >= myRank) continue
-                val nm = o.optString("product_name_es").ifBlank { o.optString("product_name") }
-                if (nm.isBlank()) continue
-                result.add(Alternative(nm, o.optString("brands").split(",").firstOrNull()?.trim().orEmpty(),
-                    o.optString("image_front_url").ifBlank { null }, ns, code))
+
+        for (cat in cats) {
+            val urls = listOf(
+                "https://es.openfoodfacts.org/api/v2/search?categories_tags=$cat&sort_by=nutriscore_score&fields=$fields&page_size=30",
+                "https://world.openfoodfacts.org/api/v2/search?categories_tags=$cat&sort_by=nutriscore_score&fields=$fields&page_size=30"
+            )
+            for (url in urls) {
+                val json = get(url) ?: continue
+                val arr = json.optJSONArray("products") ?: continue
+                for (i in 0 until arr.length()) {
+                    val o = arr.getJSONObject(i)
+                    val code = o.optString("code")
+                    if (code == product.barcode || result.any { it.barcode == code }) continue
+                    val ns = o.optString("nutriscore_grade").lowercase().takeIf { it in listOf("a","b","c","d","e") } ?: continue
+                    if (nutriRank(ns) >= myRank) continue   // solo mejores que el escaneado
+                    val nm = o.optString("product_name_es").ifBlank { o.optString("product_name") }
+                    if (nm.isBlank()) continue
+                    result.add(Alternative(nm, o.optString("brands").split(",").firstOrNull()?.trim().orEmpty(),
+                        o.optString("image_front_url").ifBlank { null }, ns, code))
+                    if (result.size >= 4) break
+                }
                 if (result.size >= 4) break
             }
-            if (result.isNotEmpty()) break
+            if (result.size >= 4) break
         }
         result
     }

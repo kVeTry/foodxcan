@@ -89,9 +89,9 @@ object Repo {
             if (bad > 0) neg.add("$bad aditivo(s) con riesgo moderado o alto")
             else pos.add("Aditivos de bajo riesgo")
         }
-        sugar?.let { if (it > 22) neg.add("Muy azucarado (${fmt(it)} g/100g)") else if (it < 5) pos.add("Bajo en azúcares (${fmt(it)} g/100g)") }
-        salt?.let { if (it > 1.5) neg.add("Alto en sal (${fmt(it)} g/100g)") else if (it < 0.3) pos.add("Bajo en sal (${fmt(it)} g/100g)") }
-        sat?.let { if (it > 5) neg.add("Alto en grasas saturadas (${fmt(it)} g/100g)") else if (it < 1.5) pos.add("Bajo en grasas saturadas") }
+        sugar?.let { if (it > 22) neg.add("Muy azucarado (${fmt(it)} g/100g)") else if (it < 5) pos.add("Bajo en azúcares (${fmt(it)} g/100g)") else {} }
+        salt?.let { if (it > 1.5) neg.add("Alto en sal (${fmt(it)} g/100g)") else if (it < 0.3) pos.add("Bajo en sal (${fmt(it)} g/100g)") else {} }
+        sat?.let { if (it > 5) neg.add("Alto en grasas saturadas (${fmt(it)} g/100g)") else if (it < 1.5) pos.add("Bajo en grasas saturadas") else {} }
         fib?.let { if (it >= 3) pos.add("Buena fuente de fibra (${fmt(it)} g/100g)") }
         prot?.let { if (it >= 8) pos.add("Rico en proteínas (${fmt(it)} g/100g)") }
         kcal?.let { if (it > 450) neg.add("Muy calórico (${fmt(it)} kcal/100g)") }

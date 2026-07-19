@@ -38,8 +38,18 @@ object Repo {
     } catch (e: Exception) { null }
 
     suspend fun fetchProduct(barcode: String): Product? = withContext(Dispatchers.IO) {
-        val json = get("https://world.openfoodfacts.org/api/v2/product/$barcode.json") ?: return@withContext null
-        if (json.optInt("status") != 1) return@withContext null
+        // Se prueban varios servidores/endpoints: muchos productos españoles están en 'es' o en el endpoint v0
+        val urls = listOf(
+            "https://es.openfoodfacts.org/api/v2/product/$barcode.json",
+            "https://world.openfoodfacts.org/api/v2/product/$barcode.json",
+            "https://world.openfoodfacts.org/api/v0/product/$barcode.json"
+        )
+        var json: JSONObject? = null
+        for (u in urls) {
+            val r = get(u)
+            if (r != null && r.optInt("status") == 1 && r.has("product")) { json = r; break }
+        }
+        if (json == null) return@withContext null
         val p = json.getJSONObject("product")
 
         val name = p.optString("product_name_es").ifBlank { p.optString("product_name") }.ifBlank { "Producto sin nombre" }
@@ -103,24 +113,36 @@ object Repo {
 
     suspend fun fetchAlternatives(product: Product): List<Alternative> = withContext(Dispatchers.IO) {
         val cat = product.category ?: return@withContext emptyList()
-        val url = "https://world.openfoodfacts.org/api/v2/search?categories_tags=$cat&countries_tags=en:spain" +
-                "&sort_by=nutriscore_score&fields=code,product_name,product_name_es,brands,image_front_url,nutriscore_grade&page_size=12"
-        val json = get(url) ?: return@withContext emptyList()
-        val arr = json.optJSONArray("products") ?: return@withContext emptyList()
-        buildList {
+        val myRank = nutriRank(product.nutriScore)
+        val fields = "code,product_name,product_name_es,brands,image_front_url,nutriscore_grade"
+        // Primero con productos de España; si no hay, se busca a nivel mundial
+        val urls = listOf(
+            "https://world.openfoodfacts.org/api/v2/search?categories_tags=$cat&countries_tags=en:spain&sort_by=nutriscore_score&fields=$fields&page_size=25",
+            "https://world.openfoodfacts.org/api/v2/search?categories_tags=$cat&sort_by=nutriscore_score&fields=$fields&page_size=25"
+        )
+        val result = mutableListOf<Alternative>()
+        for (url in urls) {
+            val json = get(url) ?: continue
+            val arr = json.optJSONArray("products") ?: continue
             for (i in 0 until arr.length()) {
                 val o = arr.getJSONObject(i)
                 val code = o.optString("code")
-                if (code == product.barcode) continue
-                val ns = o.optString("nutriscore_grade").lowercase().takeIf { it in listOf("a","b") } ?: continue
+                if (code == product.barcode || result.any { it.barcode == code }) continue
+                val ns = o.optString("nutriscore_grade").lowercase().takeIf { it in listOf("a","b","c","d","e") } ?: continue
+                // Solo alternativas con mejor Nutri-Score que el producto escaneado
+                if (nutriRank(ns) >= myRank) continue
                 val nm = o.optString("product_name_es").ifBlank { o.optString("product_name") }
                 if (nm.isBlank()) continue
-                add(Alternative(nm, o.optString("brands").split(",").firstOrNull()?.trim().orEmpty(),
+                result.add(Alternative(nm, o.optString("brands").split(",").firstOrNull()?.trim().orEmpty(),
                     o.optString("image_front_url").ifBlank { null }, ns, code))
-                if (size >= 3) break
+                if (result.size >= 4) break
             }
+            if (result.isNotEmpty()) break
         }
+        result
     }
+
+    private fun nutriRank(g: String?) = when (g?.lowercase()) { "a" -> 1; "b" -> 2; "c" -> 3; "d" -> 4; "e" -> 5; else -> 3 }
 
     // Precio medio orientativo por tipo de producto (España, estimación)
     private fun estimatePrice(catTag: String?, cats: String): String? {

@@ -385,10 +385,10 @@ fun ProductDetail(p: Product, alternatives: List<Alternative>, onAlternative: (S
                                         Spacer(Modifier.width(8.dp))
                                         Text("Analisis de la IA", fontWeight = FontWeight.Bold, color = pal.tinta)
                                     }
+                                    Spacer(Modifier.height(10.dp))
+                                    AiFormatted(st.text)
                                     Spacer(Modifier.height(8.dp))
-                                    Text(st.text, color = pal.gris, fontSize = 14.sp, lineHeight = 20.sp)
-                                    Spacer(Modifier.height(8.dp))
-                                    Text("Generado por IA con busqueda web. Puede contener errores.", color = pal.gris, fontSize = 11.sp)
+                                    Text("Generado por IA. Puede contener errores.", color = pal.gris, fontSize = 11.sp)
                                 }
                                 is AiRepo.Result.Error -> {
                                     Text(st.message, color = Malo, fontSize = 14.sp)
@@ -484,6 +484,32 @@ fun PointRow(text: String, color: Color) {
         Box(Modifier.padding(top = 6.dp).size(8.dp).clip(CircleShape).background(color))
         Spacer(Modifier.width(10.dp))
         Text(text, color = LocalPal.current.tinta, fontSize = 14.sp)
+    }
+}
+
+@Composable
+fun AiFormatted(text: String) {
+    val pal = LocalPal.current
+    val titulos = mapOf(
+        "RESUMEN" to pal.tinta, "EN QUE AYUDA" to Bueno, "EN QUÉ AYUDA" to Bueno,
+        "EN QUE PERJUDICA" to Malo, "EN QUÉ PERJUDICA" to Malo,
+        "ALTERNATIVAS MEJORES" to Color(0xFF4A6FA5), "ALTERNATIVAS" to Color(0xFF4A6FA5),
+        "CONSEJO" to Medio
+    )
+    Column {
+        text.split("\n").filter { it.isNotBlank() }.forEach { linea ->
+            val l = linea.trim()
+            // Detecta "TITULO:" al inicio de la línea
+            val titulo = titulos.keys.firstOrNull { l.uppercase().startsWith("$it:") || l.uppercase().startsWith("**$it") }
+            if (titulo != null) {
+                val resto = l.substringAfter(":").trim()
+                Spacer(Modifier.height(8.dp))
+                Text(titulo.replace("Ó", "O"), color = titulos[titulo]!!, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                if (resto.isNotBlank()) Text(resto.removeSuffix("**"), color = pal.gris, fontSize = 14.sp, lineHeight = 20.sp)
+            } else {
+                Text(l.removePrefix("- ").removeSurrounding("**"), color = pal.gris, fontSize = 14.sp, lineHeight = 20.sp)
+            }
+        }
     }
 }
 

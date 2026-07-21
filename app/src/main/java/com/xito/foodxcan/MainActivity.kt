@@ -115,16 +115,15 @@ fun App(dark: Boolean, onToggleDark: (Boolean) -> Unit) {
     }
 
     when (screen) {
-        "home" -> HomeScreen(dark, onToggleDark, onScan = { screen = "scan" }, onManual = { lookup(it) }, onHistory = { screen = "history" }, onSettings = { screen = "settings" })
+        "home" -> HomeScreen(dark, onToggleDark, onScan = { screen = "scan" }, onManual = { lookup(it) }, onHistory = { screen = "history" })
         "scan" -> ScannerScreen(onDetected = { lookup(it) }, onBack = { screen = "home" })
         "history" -> HistoryScreen(history, onOpen = { lookup(it) }, onBack = { screen = "home" }, onClear = { History.clear(ctx); history = emptyList() })
-        "settings" -> SettingsScreen(onBack = { screen = "home" })
         "result" -> ResultScreen(product, alternatives, loading, error, onBack = { screen = "home" }, onScanAgain = { screen = "scan" }, onAlternative = { lookup(it) })
     }
 }
 
 @Composable
-fun HomeScreen(dark: Boolean, onToggleDark: (Boolean) -> Unit, onScan: () -> Unit, onManual: (String) -> Unit, onHistory: () -> Unit, onSettings: () -> Unit) {
+fun HomeScreen(dark: Boolean, onToggleDark: (Boolean) -> Unit, onScan: () -> Unit, onManual: (String) -> Unit, onHistory: () -> Unit) {
     val pal = LocalPal.current
     var manual by remember { mutableStateOf("") }
     Column(Modifier.fillMaxSize().background(pal.header)) {
@@ -136,9 +135,6 @@ fun HomeScreen(dark: Boolean, onToggleDark: (Boolean) -> Unit, onScan: () -> Uni
             }
             IconButton(onClick = { onToggleDark(!dark) }) {
                 Icon(if (dark) Icons.Filled.LightMode else Icons.Filled.DarkMode, "Cambiar tema", tint = Lima)
-            }
-            IconButton(onClick = onSettings) {
-                Icon(Icons.Filled.Settings, "Ajustes", tint = Lima)
             }
         }
         Spacer(Modifier.height(32.dp))
@@ -216,44 +212,6 @@ fun ScoreBadge(score: Int) {
     val c = scoreColor(score)
     Box(Modifier.size(44.dp).clip(CircleShape).background(c.copy(alpha = 0.15f)), contentAlignment = Alignment.Center) {
         Text("$score", color = c, fontWeight = FontWeight.Bold)
-    }
-}
-
-@Composable
-fun SettingsScreen(onBack: () -> Unit) {
-    val pal = LocalPal.current
-    val ctx = LocalContext.current
-    var key by remember { mutableStateOf(History.getApiKey(ctx)) }
-    var saved by remember { mutableStateOf(false) }
-    Column(Modifier.fillMaxSize().background(pal.fondo)) {
-        Row(Modifier.statusBarsPadding().fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onBack) { Icon(Icons.Filled.ArrowBack, null, tint = pal.tinta) }
-            Text("Ajustes", color = pal.tinta, fontSize = 20.sp, fontWeight = FontWeight.Bold)
-        }
-        Column(Modifier.padding(24.dp)) {
-            Text("Análisis con IA", color = pal.tinta, fontSize = 17.sp, fontWeight = FontWeight.Bold)
-            Spacer(Modifier.height(8.dp))
-            Text("Para que la IA busque en internet e informe sobre cada producto, necesitas una API key de Anthropic. Se guarda solo en tu móvil.",
-                color = pal.gris, fontSize = 13.sp, lineHeight = 18.sp)
-            Spacer(Modifier.height(16.dp))
-            OutlinedTextField(
-                value = key, onValueChange = { key = it.trim(); saved = false },
-                placeholder = { Text("sk-ant-...", color = pal.gris) },
-                label = { Text("API key de Anthropic") },
-                singleLine = true, shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth()
-            )
-            Spacer(Modifier.height(16.dp))
-            Button(
-                onClick = { History.setApiKey(ctx, key); saved = true },
-                colors = ButtonDefaults.buttonColors(containerColor = pal.header),
-                shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth()
-            ) { Text(if (saved) "Guardado ✓" else "Guardar", color = Color.White) }
-            Spacer(Modifier.height(24.dp))
-            Text("¿Cómo consigo la clave?", color = pal.tinta, fontWeight = FontWeight.SemiBold)
-            Spacer(Modifier.height(6.dp))
-            Text("Entra en console.anthropic.com, crea una cuenta, añade unos euros de saldo y genera una API key en la sección \"API Keys\". Cada análisis cuesta muy pocos céntimos.",
-                color = pal.gris, fontSize = 13.sp, lineHeight = 18.sp)
-        }
     }
 }
 
@@ -368,7 +326,6 @@ fun ResultScreen(product: Product?, alternatives: List<Alternative>, loading: Bo
 @Composable
 fun ProductDetail(p: Product, alternatives: List<Alternative>, onAlternative: (String) -> Unit) {
     val pal = LocalPal.current
-    val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     var aiState by remember(p.barcode) { mutableStateOf<AiRepo.Result?>(null) }
     var aiLoading by remember(p.barcode) { mutableStateOf(false) }
@@ -399,7 +356,7 @@ fun ProductDetail(p: Product, alternatives: List<Alternative>, onAlternative: (S
                     onClick = {
                         aiLoading = true; aiState = null
                         scope.launch {
-                            aiState = AiRepo.analyze(History.getApiKey(ctx), p)
+                            aiState = AiRepo.analyze(p)
                             aiLoading = false
                         }
                     },

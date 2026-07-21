@@ -55,9 +55,5 @@ object History {
     fun isDark(ctx: Context) = prefs(ctx).getBoolean("dark", false)
     fun setDark(ctx: Context, v: Boolean) = prefs(ctx).edit().putBoolean("dark", v).apply()
 
-    // API key de Anthropic para el análisis con IA
-    fun getApiKey(ctx: Context) = prefs(ctx).getString("api_key", "") ?: ""
-    fun setApiKey(ctx: Context, v: String) = prefs(ctx).edit().putString("api_key", v).apply()
-
     private fun prefs(ctx: Context) = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 }

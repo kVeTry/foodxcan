@@ -20,3 +20,10 @@ Datos nutricionales: [Open Food Facts](https://world.openfoodfacts.org) (gratuit
 > El precio mostrado es una estimación orientativa por categoría de producto, no un precio real de tienda.
 
 Hecho por **Xito Development**.
+
+## Licencia
+
+Este proyecto se distribuye bajo la licencia **MIT** (ver archivo `LICENSE`).
+Puedes usarlo, modificarlo y compartirlo libremente citando a Xito Development.
+
+Los datos de productos provienen de [Open Food Facts](https://world.openfoodfacts.org) (licencia ODbL) y el análisis con IA usa modelos gratuitos de [Pollinations](https://pollinations.ai).

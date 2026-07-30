@@ -55,5 +55,9 @@ object History {
     fun isDark(ctx: Context) = prefs(ctx).getBoolean("dark", false)
     fun setDark(ctx: Context, v: Boolean) = prefs(ctx).edit().putBoolean("dark", v).apply()
 
+    // Sonido al escanear
+    fun isSound(ctx: Context) = prefs(ctx).getBoolean("sound", true)
+    fun setSound(ctx: Context, v: Boolean) = prefs(ctx).edit().putBoolean("sound", v).apply()
+
     private fun prefs(ctx: Context) = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 }

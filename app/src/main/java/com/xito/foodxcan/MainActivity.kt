@@ -117,26 +117,48 @@ fun App(dark: Boolean, onToggleDark: (Boolean) -> Unit) {
     var screen by remember { mutableStateOf("home") }
     var product by remember { mutableStateOf<Product?>(null) }
     var alternatives by remember { mutableStateOf<List<Alternative>>(emptyList()) }
+    var alerts by remember { mutableStateOf<List<FoodAlert>>(emptyList()) }
     var loading by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var history by remember { mutableStateOf(History.load(ctx)) }
     var sound by remember { mutableStateOf(History.isSound(ctx)) }
     var sheetExpanded by remember { mutableStateOf(false) }
+    var guess by remember { mutableStateOf<AiRepo.Guess?>(null) }
+    var guessLoading by remember { mutableStateOf(false) }
+    var lastCode by remember { mutableStateOf("") }
     val scope = rememberCoroutineScope()
 
     fun load(code: String, fromScanner: Boolean) {
+        // Si ya estamos mostrando o cargando ese mismo codigo, no se repite la busqueda
+        if (fromScanner && code == lastCode && (loading || guessLoading || product != null)) return
         loading = true; error = null; alternatives = emptyList(); product = null
+        alerts = emptyList(); guess = null; guessLoading = false; lastCode = code
         if (!fromScanner) { screen = "result"; sheetExpanded = true }
         scope.launch {
             val p = Repo.fetchProduct(code)
-            if (p == null) error = "No encontramos el producto\n\nCodigo: $code\n\nPuedes anadirlo en la app oficial de Open Food Facts."
-            else {
+            if (p == null) {
+                loading = false
+                guessLoading = true
+                val (g, err) = AiRepo.identify(code)
+                guessLoading = false
+                if (g != null && g.name.lowercase() != "desconocido") guess = g
+                else error = err ?: "No encontramos el producto ni la IA supo identificarlo.\n\nCodigo: $code"
+            } else {
                 product = p
                 History.add(ctx, p); history = History.load(ctx)
+                loading = false
+                alerts = Alerts.matchFor(p)
                 alternatives = Repo.fetchAlternatives(p)
             }
-            loading = false
         }
+    }
+
+    fun acceptGuess() {
+        val g = guess ?: return
+        val p = AiRepo.guessToProduct(lastCode, g)
+        product = p; guess = null
+        History.add(ctx, p); history = History.load(ctx)
+        sheetExpanded = true
     }
 
     when (screen) {
@@ -151,15 +173,17 @@ fun App(dark: Boolean, onToggleDark: (Boolean) -> Unit) {
         "scan" -> ScanScreen(
             sound = sound,
             product = product, alternatives = alternatives, loading = loading, error = error,
+            alerts = alerts, guess = guess, guessLoading = guessLoading, barcode = lastCode,
+            onAcceptGuess = { acceptGuess() },
             expanded = sheetExpanded, onExpandedChange = { sheetExpanded = it },
             onDetected = { load(it, true) },
-            onBack = { screen = "home"; product = null; error = null },
-            onReset = { product = null; error = null; loading = false; sheetExpanded = false },
+            onBack = { screen = "home"; product = null; error = null; guess = null },
+            onReset = { product = null; error = null; loading = false; sheetExpanded = false; guess = null; alerts = emptyList(); lastCode = "" },
             onAlternative = { load(it, false) }
         )
 
         "result" -> Box(Modifier.fillMaxSize().background(LocalPal.current.fondo)) {
-            FullDetail(product, alternatives, loading, error,
+            FullDetail(product, alternatives, alerts, loading, error,
                 onBack = { screen = "home" }, onScanAgain = { screen = "scan"; sheetExpanded = false; product = null; error = null },
                 onAlternative = { load(it, false) })
         }
@@ -265,9 +289,7 @@ fun HistoryScreen(items: List<HistoryItem>, onOpen: (String) -> Unit, onBack: ()
             val fmt = remember { SimpleDateFormat("d MMM · HH:mm", Locale("es", "ES")) }
             LazyColumn(contentPadding = PaddingValues(16.dp)) {
                 items(items) { h ->
-                    var visible by remember { mutableStateOf(false) }
-                    LaunchedEffect(Unit) { visible = true }
-                    AnimatedVisibility(visible, enter = fadeIn() + slideInVertically { it / 3 }) {
+                    run {
                         Card(Modifier.padding(vertical = 5.dp).fillMaxWidth().clickable { onOpen(h.barcode) },
                             colors = CardDefaults.cardColors(containerColor = pal.superficie), shape = RoundedCornerShape(16.dp)) {
                             Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -301,6 +323,7 @@ fun ScoreBadge(score: Int) {
 fun ScanScreen(
     sound: Boolean,
     product: Product?, alternatives: List<Alternative>, loading: Boolean, error: String?,
+    alerts: List<FoodAlert>, guess: AiRepo.Guess?, guessLoading: Boolean, barcode: String, onAcceptGuess: () -> Unit,
     expanded: Boolean, onExpandedChange: (Boolean) -> Unit,
     onDetected: (String) -> Unit, onBack: () -> Unit, onReset: () -> Unit, onAlternative: (String) -> Unit
 ) {
@@ -315,7 +338,7 @@ fun ScanScreen(
     var camera by remember { mutableStateOf<androidx.camera.core.Camera?>(null) }
     var torchOn by remember { mutableStateOf(false) }
     val hasTorch = camera?.cameraInfo?.hasFlashUnit() == true
-    val sheetVisible = loading || product != null || error != null
+    val sheetVisible = loading || guessLoading || product != null || error != null || guess != null
 
     BoxWithConstraints(Modifier.fillMaxSize().background(Color.Black)) {
         val maxH = maxHeight
@@ -324,7 +347,8 @@ fun ScanScreen(
         val sheetH by animateDpAsState(targetH, tween(320, easing = FastOutSlowInEasing), label = "sheet")
 
         // ---- Camara ----
-        if (hasPermission) CameraPreview(sound, paused = sheetVisible, onDetected = onDetected) { camera = it }
+        // La camara sigue escaneando en standby: solo se pausa con la ficha desplegada
+        if (hasPermission) CameraPreview(sound, paused = expanded, onDetected = onDetected) { camera = it }
         else Column(Modifier.align(Alignment.Center), horizontalAlignment = Alignment.CenterHorizontally) {
             Text("Se necesita permiso de camara", color = Color.White)
             Spacer(Modifier.height(12.dp))
@@ -378,21 +402,27 @@ fun ScanScreen(
             modifier = Modifier.align(Alignment.BottomCenter)
         ) {
             Surface(
-                Modifier.fillMaxWidth().height(sheetH)
-                    .draggable(
-                        orientation = Orientation.Vertical,
-                        state = rememberDraggableState { delta ->
-                            if (delta < -8f) onExpandedChange(true)
-                            if (delta > 12f && expanded) onExpandedChange(false)
-                        },
-                        onDragStopped = { }
-                    ),
+                Modifier.fillMaxWidth().height(sheetH),
                 shape = RoundedCornerShape(topStart = 26.dp, topEnd = 26.dp),
                 color = pal.fondo, shadowElevation = 16.dp
             ) {
                 Column(Modifier.fillMaxSize()) {
-                    // asa
-                    Box(Modifier.fillMaxWidth().clickable { onExpandedChange(!expanded) }.padding(vertical = 10.dp),
+                    // asa: se arrastra acumulando el recorrido y se decide al soltar
+                    val arrastre = remember { mutableStateOf(0f) }
+                    Box(
+                        Modifier.fillMaxWidth()
+                            .draggable(
+                                orientation = Orientation.Vertical,
+                                state = rememberDraggableState { d -> arrastre.value += d },
+                                onDragStopped = {
+                                    val d = arrastre.value
+                                    arrastre.value = 0f
+                                    if (d < -60f) onExpandedChange(true)
+                                    else if (d > 60f) onExpandedChange(false)
+                                }
+                            )
+                            .clickable { onExpandedChange(!expanded) }
+                            .padding(vertical = 12.dp),
                         contentAlignment = Alignment.Center) {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
                             Box(Modifier.size(44.dp, 5.dp).clip(RoundedCornerShape(3.dp)).background(pal.borde))
@@ -409,6 +439,13 @@ fun ScanScreen(
                             CircularProgressIndicator(color = pal.acento)
                             Spacer(Modifier.height(14.dp)); Text("Analizando producto...", color = pal.gris)
                         }
+                        guessLoading -> Column(Modifier.fillMaxWidth().padding(26.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                            CircularProgressIndicator(color = pal.acento)
+                            Spacer(Modifier.height(14.dp))
+                            Text("No esta en la base de datos", color = pal.tinta, fontWeight = FontWeight.SemiBold)
+                            Text("Preguntando a la IA por el codigo $barcode...", color = pal.gris, fontSize = 13.sp, textAlign = TextAlign.Center)
+                        }
+                        guess != null -> GuessCard(guess, barcode, onAcceptGuess, onReset)
                         error != null -> Column(Modifier.fillMaxWidth().padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                             Icon(Icons.Filled.SearchOff, null, tint = pal.gris, modifier = Modifier.size(44.dp))
                             Spacer(Modifier.height(10.dp))
@@ -420,8 +457,8 @@ fun ScanScreen(
                             }
                         }
                         product != null -> {
-                            if (expanded) ProductDetail(product, alternatives, onAlternative, Modifier.weight(1f))
-                            else PeekCard(product) { onExpandedChange(true) }
+                            if (expanded) ProductDetail(product, alternatives, alerts, onAlternative, Modifier.weight(1f))
+                            else PeekCard(product, alerts) { onExpandedChange(true) }
                         }
                     }
                     if (product != null && expanded) {
@@ -439,7 +476,55 @@ fun ScanScreen(
 }
 
 @Composable
-fun PeekCard(p: Product, onExpand: () -> Unit) {
+fun GuessCard(g: AiRepo.Guess, barcode: String, onAccept: () -> Unit, onReject: () -> Unit) {
+    val pal = LocalPal.current
+    val confColor = when (g.confidence.lowercase()) { "alta" -> Bueno; "media" -> Medio; else -> Malo }
+    Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.Filled.AutoAwesome, null, tint = pal.acento, modifier = Modifier.size(20.dp))
+            Spacer(Modifier.width(8.dp))
+            Text("Producto no encontrado", fontWeight = FontWeight.Bold, color = pal.tinta, fontSize = 15.sp)
+        }
+        Spacer(Modifier.height(4.dp))
+        Text("No esta en Open Food Facts. La IA cree que es:", color = pal.gris, fontSize = 12.sp)
+        Spacer(Modifier.height(12.dp))
+        Card(colors = CardDefaults.cardColors(containerColor = pal.superficie), shape = RoundedCornerShape(16.dp)) {
+            Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text(g.name, fontWeight = FontWeight.Bold, color = pal.tinta, fontSize = 16.sp)
+                    if (g.brand.isNotBlank()) Text(g.brand, color = pal.gris, fontSize = 13.sp)
+                    if (g.category.isNotBlank()) Text(g.category, color = pal.gris, fontSize = 12.sp)
+                    Spacer(Modifier.height(6.dp))
+                    Chip("Confianza ${g.confidence}", confColor)
+                }
+                MiniRing(g.score)
+            }
+        }
+        if (g.note.isNotBlank()) {
+            Spacer(Modifier.height(8.dp))
+            Text(g.note, color = pal.gris, fontSize = 11.sp, lineHeight = 15.sp)
+        }
+        Spacer(Modifier.height(14.dp))
+        Text("Es correcto?", color = pal.tinta, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+        Spacer(Modifier.height(8.dp))
+        Row {
+            Button(onClick = onAccept, modifier = Modifier.weight(1f),
+                colors = ButtonDefaults.buttonColors(containerColor = Bueno), shape = RoundedCornerShape(14.dp)) {
+                Icon(Icons.Filled.Check, null, tint = Color.White, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(6.dp)); Text("Si, analizar", color = Color.White)
+            }
+            Spacer(Modifier.width(10.dp))
+            OutlinedButton(onClick = onReject, modifier = Modifier.weight(1f), shape = RoundedCornerShape(14.dp),
+                border = androidx.compose.foundation.BorderStroke(1.dp, pal.borde)) {
+                Text("No", color = pal.tinta)
+            }
+        }
+        Spacer(Modifier.height(10.dp))
+    }
+}
+
+@Composable
+fun PeekCard(p: Product, alerts: List<FoodAlert>, onExpand: () -> Unit) {
     val pal = LocalPal.current
     Column(Modifier.fillMaxWidth().clickable { onExpand() }.padding(horizontal = 20.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -452,6 +537,17 @@ fun PeekCard(p: Product, onExpand: () -> Unit) {
             }
             Spacer(Modifier.width(10.dp))
             MiniRing(p.score)
+        }
+        if (alerts.isNotEmpty()) {
+            Spacer(Modifier.height(10.dp))
+            Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(Malo)
+                .padding(horizontal = 12.dp, vertical = 9.dp), verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Filled.Warning, null, tint = Color.White, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+                Text(if (alerts.any { it.matchLevel >= 2 }) "ALERTA: no consumir sin comprobar el lote"
+                     else "Alerta sanitaria de este tipo de producto",
+                     color = Color.White, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+            }
         }
         Spacer(Modifier.height(12.dp))
         Row {
@@ -486,40 +582,34 @@ fun MiniRing(score: Int) {
 fun CameraPreview(sound: Boolean, paused: Boolean, onDetected: (String) -> Unit,
                   onCameraReady: (androidx.camera.core.Camera) -> Unit) {
     val lifecycleOwner = LocalLifecycleOwner.current
+    // Estos objetos NO se recrean al recomponer: evitan re-disparos en bucle
+    val gate = remember { ScanGate() }
     val pausedRef = remember { mutableStateOf(paused) }
-    pausedRef.value = paused
     val soundRef = remember { mutableStateOf(sound) }
+    pausedRef.value = paused
     soundRef.value = sound
-    var handled by remember { mutableStateOf(false) }
-    if (!paused) handled = false
 
     AndroidView(factory = { ctx ->
         val previewView = PreviewView(ctx)
         val executor = Executors.newSingleThreadExecutor()
         val scanner = BarcodeScanning.getClient()
-        // Confirmacion: el mismo codigo debe leerse 3 veces y ser valido
-        var lastCode: String? = null
-        var repeats = 0
         ProcessCameraProvider.getInstance(ctx).apply {
             addListener({
                 val provider = get()
                 val preview = Preview.Builder().build().also { it.setSurfaceProvider(previewView.surfaceProvider) }
-                val analysis = ImageAnalysis.Builder().setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST).build()
+                val analysis = ImageAnalysis.Builder()
+                    .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST).build()
                 analysis.setAnalyzer(executor) { proxy ->
                     val media = proxy.image
-                    if (media != null && !pausedRef.value && !handled) {
+                    if (media != null && !pausedRef.value) {
                         val img = InputImage.fromMediaImage(media, proxy.imageInfo.rotationDegrees)
                         scanner.process(img)
                             .addOnSuccessListener { codes ->
                                 val v = codes.firstOrNull()?.rawValue
-                                if (v != null && v.all { it.isDigit() } && BarcodeUtils.isValid(v)) {
-                                    if (v == lastCode) repeats++ else { lastCode = v; repeats = 1 }
-                                    if (repeats >= 3 && !handled) {
-                                        handled = true
-                                        if (soundRef.value) Beeper.beep()
-                                        onDetected(v)
-                                    }
-                                } else if (v != lastCode) { lastCode = null; repeats = 0 }
+                                if (v != null && BarcodeUtils.isValid(v) && gate.offer(v)) {
+                                    if (soundRef.value) Beeper.beep()
+                                    onDetected(v)
+                                }
                             }
                             .addOnCompleteListener { proxy.close() }
                     } else proxy.close()
@@ -535,7 +625,7 @@ fun CameraPreview(sound: Boolean, paused: Boolean, onDetected: (String) -> Unit,
 
 // ==================== DETALLE COMPLETO (pantalla aparte) ====================
 @Composable
-fun FullDetail(product: Product?, alternatives: List<Alternative>, loading: Boolean, error: String?,
+fun FullDetail(product: Product?, alternatives: List<Alternative>, alerts: List<FoodAlert>, loading: Boolean, error: String?,
                onBack: () -> Unit, onScanAgain: () -> Unit, onAlternative: (String) -> Unit) {
     val pal = LocalPal.current
     Box(Modifier.fillMaxSize().background(pal.fondo)) {
@@ -553,7 +643,7 @@ fun FullDetail(product: Product?, alternatives: List<Alternative>, loading: Bool
                     Text("Escanear", color = if (pal == DarkPal) Bosque else Color.White)
                 }
             }
-            product != null -> ProductDetail(product, alternatives, onAlternative, Modifier.fillMaxSize(), topPad = 64.dp)
+            product != null -> ProductDetail(product, alternatives, alerts, onAlternative, Modifier.fillMaxSize(), topPad = 64.dp)
         }
         Row(Modifier.statusBarsPadding().padding(8.dp)) {
             IconButton(onClick = onBack) { Icon(Icons.Filled.ArrowBack, null, tint = pal.tinta) }
@@ -565,12 +655,13 @@ fun FullDetail(product: Product?, alternatives: List<Alternative>, loading: Bool
 
 // ==================== FICHA DEL PRODUCTO ====================
 @Composable
-fun ProductDetail(p: Product, alternatives: List<Alternative>, onAlternative: (String) -> Unit,
+fun ProductDetail(p: Product, alternatives: List<Alternative>, alerts: List<FoodAlert>, onAlternative: (String) -> Unit,
                   modifier: Modifier = Modifier, topPad: Dp = 4.dp) {
     val pal = LocalPal.current
     val scope = rememberCoroutineScope()
     var aiState by remember(p.barcode) { mutableStateOf<AiRepo.Result?>(null) }
     var aiLoading by remember(p.barcode) { mutableStateOf(false) }
+    val hazards = remember(p.barcode) { Alerts.hazards(p) }
 
     LazyColumn(modifier, contentPadding = PaddingValues(top = topPad, bottom = 24.dp)) {
         item {
@@ -587,9 +678,27 @@ fun ProductDetail(p: Product, alternatives: List<Alternative>, onAlternative: (S
                     }
                 }
             }
+            val exacta = alerts.any { it.matchLevel >= 2 }
+            if (alerts.isNotEmpty() || hazards.any { it.severity >= 3 }) {
+                Spacer(Modifier.height(14.dp))
+                DangerBanner(alerts.isNotEmpty(), exacta)
+            }
+            if (p.aiEstimated) {
+                Spacer(Modifier.height(12.dp))
+                Card(Modifier.padding(horizontal = 22.dp).fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = Medio.copy(alpha = 0.15f)), shape = RoundedCornerShape(14.dp)) {
+                    Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Filled.AutoAwesome, null, tint = Medio, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text("Datos estimados por IA, no verificados", color = Medio, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                    }
+                }
+            }
             Spacer(Modifier.height(20.dp))
             ScoreRing(p.score)
-            Spacer(Modifier.height(10.dp))
+            Spacer(Modifier.height(12.dp))
+            ScoreBar(p.score)
+            Spacer(Modifier.height(12.dp))
             Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp), horizontalArrangement = Arrangement.Center) {
                 p.nutriScore?.let { Chip("Nutri ${it.uppercase()}", scoreColorNutri(it)); Spacer(Modifier.width(6.dp)) }
                 p.novaGroup?.let { Chip("NOVA $it", if (it >= 4) Malo else if (it <= 2) Bueno else Medio); Spacer(Modifier.width(6.dp)) }
@@ -652,16 +761,39 @@ fun ProductDetail(p: Product, alternatives: List<Alternative>, onAlternative: (S
             }
         }
 
+        // ---- Seguridad alimentaria ----
+        if (alerts.isNotEmpty() || hazards.isNotEmpty()) {
+            item { SectionTitle("Seguridad alimentaria", Icons.Filled.HealthAndSafety, Malo) }
+        }
+        if (hazards.isNotEmpty()) {
+            items(hazards) { h -> HazardCard(h) }
+        }
+        if (alerts.isNotEmpty()) {
+            item {
+                Text("Alertas oficiales de AESAN relacionadas con este producto:",
+                    color = pal.gris, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 22.dp, vertical = 6.dp))
+            }
+            items(alerts) { a -> AlertCard(a) }
+            item {
+                Text("AESAN no publica codigos de barras: el cruce se hace por marca y nombre del producto. Confirma siempre el lote en la alerta oficial.",
+                    color = pal.gris, fontSize = 11.sp, lineHeight = 15.sp,
+                    modifier = Modifier.padding(horizontal = 22.dp, vertical = 6.dp))
+            }
+        }
+        if (alerts.isNotEmpty() || hazards.isNotEmpty()) {
+            item { Spacer(Modifier.height(16.dp)) }
+        }
+
         // ---- Negativos ----
         if (p.negatives.isNotEmpty()) {
-            item { SectionTitle("Lo malo (${p.negatives.size})", Icons.Filled.ThumbDown, Malo) }
-            items(p.negatives) { PointRow(it, Malo) }
+            item { SectionTitle("Negativos", Icons.Filled.ThumbDown, Malo) }
+            items(p.negatives) { InsightRow(it) }
             item { Spacer(Modifier.height(14.dp)) }
         }
         // ---- Positivos ----
         if (p.positives.isNotEmpty()) {
-            item { SectionTitle("Lo bueno (${p.positives.size})", Icons.Filled.ThumbUp, Bueno) }
-            items(p.positives) { PointRow(it, Bueno) }
+            item { SectionTitle("Positivos", Icons.Filled.ThumbUp, Bueno) }
+            items(p.positives) { InsightRow(it) }
             item { Spacer(Modifier.height(14.dp)) }
         }
 
@@ -791,6 +923,146 @@ fun ScoreRing(score: Int) {
 }
 
 @Composable
+fun DangerBanner(esAlerta: Boolean, exacta: Boolean) {
+    val pulse = rememberInfiniteTransition(label = "danger")
+    val a by pulse.animateFloat(if (exacta) 0.65f else 0.8f, 1f,
+        infiniteRepeatable(tween(if (exacta) 550 else 800), RepeatMode.Reverse), label = "a")
+    val titulo = when {
+        esAlerta && exacta -> "NO CONSUMIR SIN COMPROBAR"
+        esAlerta -> "ATENCION: ALERTA SANITARIA"
+        else -> "ATENCION: SUSTANCIA DE RIESGO"
+    }
+    val texto = when {
+        esAlerta && exacta -> "Hay una alerta oficial de AESAN sobre este producto y esta marca. Comprueba el numero de lote mas abajo antes de consumirlo."
+        esAlerta -> "Hay una alerta oficial que puede afectar a este tipo de producto. Revisa el apartado de seguridad alimentaria."
+        else -> "Este producto contiene una sustancia prohibida o bajo vigilancia sanitaria."
+    }
+    Card(Modifier.padding(horizontal = 22.dp).fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = Malo.copy(alpha = a)),
+        shape = RoundedCornerShape(16.dp)) {
+        Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(if (exacta) Icons.Filled.Dangerous else Icons.Filled.Warning, null,
+                tint = Color.White, modifier = Modifier.size(if (exacta) 40.dp else 34.dp))
+            Spacer(Modifier.width(14.dp))
+            Column {
+                Text(titulo, color = Color.White, fontWeight = FontWeight.Black,
+                    fontSize = if (exacta) 18.sp else 16.sp, letterSpacing = 0.5.sp, lineHeight = 22.sp)
+                Spacer(Modifier.height(3.dp))
+                Text(texto, color = Color.White, fontSize = 12.sp, lineHeight = 16.sp)
+            }
+        }
+    }
+}
+
+@Composable
+fun HazardCard(h: Hazard) {
+    val pal = LocalPal.current
+    val c = if (h.severity >= 3) Malo else if (h.severity == 2) Medio else Color(0xFF9BC53D)
+    Card(Modifier.padding(horizontal = 22.dp, vertical = 5.dp).fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = c.copy(alpha = 0.12f)), shape = RoundedCornerShape(14.dp)) {
+        Row(Modifier.padding(14.dp)) {
+            Icon(Icons.Filled.Dangerous, null, tint = c, modifier = Modifier.size(22.dp))
+            Spacer(Modifier.width(12.dp))
+            Column {
+                Text(h.name, color = pal.tinta, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                Spacer(Modifier.height(3.dp))
+                Text(h.reason, color = pal.gris, fontSize = 12.sp, lineHeight = 17.sp)
+            }
+        }
+    }
+}
+
+@Composable
+fun AlertCard(a: FoodAlert) {
+    val pal = LocalPal.current
+    val ctx = LocalContext.current
+    val exacta = a.matchLevel >= 2
+    Card(Modifier.padding(horizontal = 22.dp, vertical = 6.dp).fillMaxWidth().clickable {
+            try {
+                ctx.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW,
+                    android.net.Uri.parse(a.url)))
+            } catch (e: Exception) { }
+        },
+        colors = CardDefaults.cardColors(containerColor = if (exacta) Malo.copy(alpha = 0.16f) else pal.superficie),
+        shape = RoundedCornerShape(16.dp)) {
+        Column(Modifier.padding(14.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Filled.Campaign, null, tint = Malo, modifier = Modifier.size(20.dp))
+                Spacer(Modifier.width(8.dp))
+                Text(if (exacta) "COINCIDE CON ESTE PRODUCTO" else "Alerta del mismo tipo de alimento",
+                    color = Malo, fontWeight = FontWeight.Black, fontSize = 11.sp, letterSpacing = 0.4.sp)
+            }
+            Spacer(Modifier.height(8.dp))
+            Text(a.title, color = pal.tinta, fontWeight = FontWeight.SemiBold, fontSize = 13.sp, lineHeight = 18.sp)
+
+            if (a.productName.isNotBlank() || a.brand.isNotBlank()) {
+                Spacer(Modifier.height(8.dp))
+                if (a.productName.isNotBlank()) AlertField("Producto", a.productName)
+                if (a.brand.isNotBlank()) AlertField("Marca", a.brand)
+                if (a.weight.isNotBlank()) AlertField("Formato", a.weight)
+                if (a.bestBefore.isNotBlank()) AlertField("Consumo preferente", a.bestBefore)
+            }
+
+            if (a.lots.isNotEmpty()) {
+                Spacer(Modifier.height(10.dp))
+                Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
+                    .background(Malo.copy(alpha = 0.22f)).padding(12.dp)) {
+                    Text("COMPRUEBA TU LOTE", color = Malo, fontWeight = FontWeight.Black, fontSize = 11.sp, letterSpacing = 0.5.sp)
+                    Spacer(Modifier.height(6.dp))
+                    a.lots.forEach { lote ->
+                        Text("Lote $lote", color = pal.tinta, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                    }
+                    Spacer(Modifier.height(4.dp))
+                    Text("Si tu envase lleva este lote, no lo consumas.", color = pal.tinta, fontSize = 11.sp)
+                }
+            }
+
+            Spacer(Modifier.height(10.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("${a.source}${if (a.date.isNotBlank()) " · ${a.date}" else ""} · toca para leer la alerta oficial",
+                    color = pal.gris, fontSize = 11.sp, modifier = Modifier.weight(1f))
+                Icon(Icons.Filled.OpenInNew, null, tint = pal.gris, modifier = Modifier.size(15.dp))
+            }
+        }
+    }
+}
+
+@Composable
+fun AlertField(label: String, value: String) {
+    val pal = LocalPal.current
+    Row(Modifier.padding(vertical = 2.dp)) {
+        Text("$label: ", color = pal.gris, fontSize = 12.sp)
+        Text(value, color = pal.tinta, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+    }
+}
+
+@Composable
+fun ScoreBar(score: Int) {
+    val pal = LocalPal.current
+    val anim = remember { Animatable(0f) }
+    LaunchedEffect(score) { anim.animateTo(score / 100f, tween(1100, easing = FastOutSlowInEasing)) }
+    val tramos = listOf(Malo to 0.25f, Color(0xFFEB7A34) to 0.20f, Medio to 0.25f, Color(0xFF7BB661) to 0.15f, Bueno to 0.15f)
+    Column(Modifier.fillMaxWidth().padding(horizontal = 30.dp)) {
+        Row(Modifier.fillMaxWidth().height(9.dp).clip(RoundedCornerShape(50))) {
+            tramos.forEach { (c, w) -> Box(Modifier.weight(w).fillMaxHeight().background(c)) }
+        }
+        Spacer(Modifier.height(5.dp))
+        Box(Modifier.fillMaxWidth()) {
+            BoxWithConstraints {
+                val x = maxWidth * anim.value
+                Box(Modifier.offset(x = x - 6.dp)) {
+                    Icon(Icons.Filled.ArrowDropUp, null, tint = pal.tinta, modifier = Modifier.size(20.dp))
+                }
+            }
+        }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text("Malo", color = pal.gris, fontSize = 10.sp)
+            Text("Excelente", color = pal.gris, fontSize = 10.sp)
+        }
+    }
+}
+
+@Composable
 fun Chip(text: String, color: Color) {
     Box(Modifier.clip(RoundedCornerShape(50)).background(color.copy(alpha = 0.18f)).padding(horizontal = 10.dp, vertical = 5.dp)) {
         Text(text, color = color, fontSize = 11.sp, fontWeight = FontWeight.Bold)
@@ -806,17 +1078,43 @@ fun SectionTitle(title: String, icon: androidx.compose.ui.graphics.vector.ImageV
     }
 }
 
+fun insightIcon(kind: String): androidx.compose.ui.graphics.vector.ImageVector = when (kind) {
+    "sugar" -> Icons.Filled.Cookie
+    "salt" -> Icons.Filled.Grain
+    "fat", "satfat" -> Icons.Filled.WaterDrop
+    "calories" -> Icons.Filled.LocalFireDepartment
+    "protein" -> Icons.Filled.FitnessCenter
+    "fiber" -> Icons.Filled.Spa
+    "additive" -> Icons.Filled.Science
+    "allergen" -> Icons.Filled.Warning
+    "nova", "nutri" -> Icons.Filled.Assessment
+    "eco" -> Icons.Filled.Eco
+    else -> Icons.Filled.CheckCircle
+}
+
+fun severityColor(sev: Int) = when (sev) {
+    0 -> Bueno; 1 -> Color(0xFF9BC53D); 2 -> Medio; else -> Malo
+}
+
 @Composable
-fun PointRow(text: String, color: Color) {
+fun InsightRow(ins: Insight) {
     val pal = LocalPal.current
-    var visible by remember { mutableStateOf(false) }
-    LaunchedEffect(Unit) { visible = true }
-    AnimatedVisibility(visible, enter = fadeIn(tween(300)) + slideInHorizontally { -it / 6 }) {
-        Row(Modifier.padding(horizontal = 26.dp, vertical = 4.dp), verticalAlignment = Alignment.Top) {
-            Box(Modifier.padding(top = 6.dp).size(8.dp).clip(CircleShape).background(color))
-            Spacer(Modifier.width(10.dp))
-            Text(text, color = pal.tinta, fontSize = 14.sp, lineHeight = 19.sp)
+    val c = severityColor(ins.severity)
+    Column {
+        Row(Modifier.fillMaxWidth().padding(horizontal = 22.dp, vertical = 9.dp),
+            verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(38.dp).clip(CircleShape).background(pal.superficie2), contentAlignment = Alignment.Center) {
+                Icon(insightIcon(ins.kind), null, tint = pal.gris, modifier = Modifier.size(20.dp))
+            }
+            Spacer(Modifier.width(14.dp))
+            Column(Modifier.weight(1f)) {
+                Text(ins.title, color = pal.tinta, fontSize = 15.sp, fontWeight = FontWeight.Medium)
+                if (ins.detail.isNotBlank())
+                    Text(ins.detail, color = pal.gris, fontSize = 12.sp)
+            }
+            Box(Modifier.size(13.dp).clip(CircleShape).background(c))
         }
+        Divider(color = pal.borde.copy(alpha = 0.5f), thickness = 0.5.dp, modifier = Modifier.padding(start = 74.dp))
     }
 }
 

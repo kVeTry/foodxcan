@@ -17,6 +17,9 @@ enum class Source(val label: String, val host: String) {
 
 data class Nutrient(val name: String, val value: Double, val unit: String, val level: String?)
 
+/** Fila de valoracion estilo Yuka: icono, titulo, detalle y gravedad (0 mejor, 3 peor). */
+data class Insight(val kind: String, val title: String, val detail: String, val severity: Int)
+
 data class Product(
     val barcode: String,
     val name: String,
@@ -35,13 +38,14 @@ data class Product(
     val labels: List<String>,
     val additives: List<AdditiveInfo>,
     val score: Int,
-    val positives: List<String>,
-    val negatives: List<String>,
+    val positives: List<Insight>,
+    val negatives: List<Insight>,
     val nutrients: List<Nutrient>,
     val servingSize: String?,
     val estimatedPrice: String?,
     val kcal100: Double?, val sugar100: Double?, val salt100: Double?,
-    val satFat100: Double?, val protein100: Double?, val fiber100: Double?
+    val satFat100: Double?, val protein100: Double?, val fiber100: Double?,
+    val aiEstimated: Boolean = false
 )
 
 data class Alternative(val name: String, val brand: String, val imageUrl: String?, val nutriScore: String?, val barcode: String)
@@ -149,77 +153,103 @@ object Repo {
         if (salt != null && salt > 1.5) score -= 5
         score = score.coerceIn(0, 100)
 
-        // ---- Positivos y negativos (todos los detectables) ----
-        val pos = mutableListOf<String>(); val neg = mutableListOf<String>()
+        // ---- Valoraciones estilo Yuka: icono, titulo, detalle y gravedad ----
+        val pos = mutableListOf<Insight>(); val neg = mutableListOf<Insight>()
+
         when (nutri) {
-            "a" -> pos.add("Excelente perfil nutricional (Nutri-Score A)")
-            "b" -> pos.add("Buen perfil nutricional (Nutri-Score B)")
-            "c" -> neg.add("Perfil nutricional medio (Nutri-Score C)")
-            "d" -> neg.add("Perfil nutricional pobre (Nutri-Score D)")
-            "e" -> neg.add("Perfil nutricional muy pobre (Nutri-Score E)")
+            "a" -> pos.add(Insight("nutri", "Perfil nutricional", "Excelente (Nutri-Score A)", 0))
+            "b" -> pos.add(Insight("nutri", "Perfil nutricional", "Bueno (Nutri-Score B)", 0))
+            "c" -> neg.add(Insight("nutri", "Perfil nutricional", "Mediocre (Nutri-Score C)", 1))
+            "d" -> neg.add(Insight("nutri", "Perfil nutricional", "Pobre (Nutri-Score D)", 2))
+            "e" -> neg.add(Insight("nutri", "Perfil nutricional", "Muy pobre (Nutri-Score E)", 3))
         }
         when (nova) {
-            1 -> pos.add("Alimento sin procesar o minimamente procesado")
-            2 -> pos.add("Ingrediente culinario poco procesado")
-            3 -> neg.add("Alimento procesado (NOVA 3)")
-            4 -> neg.add("Producto ultraprocesado (NOVA 4)")
+            1 -> pos.add(Insight("nova", "Procesado", "Sin procesar o minimamente procesado", 0))
+            2 -> pos.add(Insight("nova", "Procesado", "Ingrediente culinario poco procesado", 0))
+            3 -> neg.add(Insight("nova", "Procesado", "Alimento procesado (NOVA 3)", 1))
+            4 -> neg.add(Insight("nova", "Ultraprocesado", "Producto ultraprocesado (NOVA 4)", 3))
         }
         when (eco) {
-            "a", "b" -> pos.add("Buen impacto medioambiental (Eco-Score ${eco.uppercase()})")
-            "d", "e" -> neg.add("Impacto medioambiental elevado (Eco-Score ${eco.uppercase()})")
+            "a", "b" -> pos.add(Insight("eco", "Impacto ambiental", "Bajo (Eco-Score ${eco.uppercase()})", 0))
+            "d", "e" -> neg.add(Insight("eco", "Impacto ambiental", "Elevado (Eco-Score ${eco.uppercase()})", 2))
         }
-        if (additives.isEmpty()) pos.add("Sin aditivos") else {
-            val altos = additives.filter { it.risk == Risk.ALTO }
-            val mods = additives.filter { it.risk == Risk.MODERADO }
-            altos.forEach { neg.add("Contiene ${it.code} ${it.name}: riesgo alto") }
-            mods.forEach { neg.add("Contiene ${it.code} ${it.name}: riesgo moderado") }
-            if (altos.isEmpty() && mods.isEmpty()) pos.add("Todos los aditivos son de bajo riesgo")
-        }
+
         sugar?.let {
-            if (it > 22) neg.add("Muy azucarado (${fmt(it)} g por 100 g)")
-            else if (it > 10) neg.add("Contenido de azucar apreciable (${fmt(it)} g por 100 g)")
-            else if (it < 5) pos.add("Bajo en azucares (${fmt(it)} g por 100 g)")
-            else {}
+            when {
+                it > 22 -> neg.add(Insight("sugar", "Azucares", "Demasiado azucar · ${fmt(it)} g", 3))
+                it > 10 -> neg.add(Insight("sugar", "Azucares", "Cantidad elevada · ${fmt(it)} g", 2))
+                it > 5 -> neg.add(Insight("sugar", "Azucares", "Cantidad moderada · ${fmt(it)} g", 1))
+                else -> pos.add(Insight("sugar", "Azucares", "Poca cantidad · ${fmt(it)} g", 0))
+            }
         }
         salt?.let {
-            if (it > 1.5) neg.add("Alto en sal (${fmt(it)} g por 100 g)")
-            else if (it > 0.9) neg.add("Sal moderadamente alta (${fmt(it)} g por 100 g)")
-            else if (it < 0.3) pos.add("Bajo en sal (${fmt(it)} g por 100 g)")
-            else {}
+            when {
+                it > 1.5 -> neg.add(Insight("salt", "Sal", "Demasiada sal · ${fmt(it)} g", 3))
+                it > 0.9 -> neg.add(Insight("salt", "Sal", "Cantidad elevada · ${fmt(it)} g", 2))
+                it > 0.3 -> neg.add(Insight("salt", "Sal", "Cantidad moderada · ${fmt(it)} g", 1))
+                else -> pos.add(Insight("salt", "Sal", "Poca cantidad · ${fmt(it)} g", 0))
+            }
         }
         sat?.let {
-            if (it > 5) neg.add("Alto en grasas saturadas (${fmt(it)} g por 100 g)")
-            else if (it < 1.5) pos.add("Bajo en grasas saturadas (${fmt(it)} g por 100 g)")
-            else {}
+            when {
+                it > 5 -> neg.add(Insight("satfat", "Grasas saturadas", "Demasiadas · ${fmt(it)} g", 3))
+                it > 3 -> neg.add(Insight("satfat", "Grasas saturadas", "Cantidad elevada · ${fmt(it)} g", 2))
+                it > 1.5 -> neg.add(Insight("satfat", "Grasas saturadas", "Cantidad moderada · ${fmt(it)} g", 1))
+                else -> pos.add(Insight("satfat", "Grasas saturadas", "Poca cantidad · ${fmt(it)} g", 0))
+            }
         }
-        fat?.let { if (it > 20) neg.add("Alto contenido de grasas (${fmt(it)} g por 100 g)") }
-        fib?.let {
-            if (it >= 6) pos.add("Muy rico en fibra (${fmt(it)} g por 100 g)")
-            else if (it >= 3) pos.add("Buena fuente de fibra (${fmt(it)} g por 100 g)")
-            else {}
-        }
-        prot?.let {
-            if (it >= 12) pos.add("Muy rico en proteinas (${fmt(it)} g por 100 g)")
-            else if (it >= 8) pos.add("Buena fuente de proteinas (${fmt(it)} g por 100 g)")
-            else {}
+        fat?.let {
+            if (it > 20) neg.add(Insight("fat", "Grasas", "Cantidad elevada · ${fmt(it)} g", 2))
+            else if (it < 3) pos.add(Insight("fat", "Grasas", "Poca cantidad · ${fmt(it)} g", 0))
         }
         kcal?.let {
-            if (it > 450) neg.add("Muy calorico (${fmt(it)} kcal por 100 g)")
-            else if (it < 100) pos.add("Bajo en calorias (${fmt(it)} kcal por 100 g)")
-            else {}
+            when {
+                it > 450 -> neg.add(Insight("calories", "Calorias", "Muy calorico · ${fmt(it)} kcal", 2))
+                it > 300 -> neg.add(Insight("calories", "Calorias", "Bastante calorico · ${fmt(it)} kcal", 1))
+                it < 100 -> pos.add(Insight("calories", "Calorias", "Bajo aporte · ${fmt(it)} kcal", 0))
+                else -> {}
+            }
         }
-        if (allergens.isNotEmpty()) neg.add("Contiene alergenos: ${allergens.joinToString(", ")}")
+        fib?.let {
+            if (it >= 6) pos.add(Insight("fiber", "Fibra", "Cantidad excelente · ${fmt(it)} g", 0))
+            else if (it >= 3) pos.add(Insight("fiber", "Fibra", "Buena cantidad · ${fmt(it)} g", 0))
+        }
+        prot?.let {
+            if (it >= 12) pos.add(Insight("protein", "Proteinas", "Cantidad excelente · ${fmt(it)} g", 0))
+            else if (it >= 8) pos.add(Insight("protein", "Proteinas", "Buena cantidad · ${fmt(it)} g", 0))
+        }
+
+        if (additives.isEmpty()) {
+            pos.add(Insight("additive", "Aditivos", "Sin aditivos", 0))
+        } else {
+            additives.forEach { a ->
+                val sev = when (a.risk) { Risk.ALTO -> 3; Risk.MODERADO -> 2; Risk.LIMITADO -> 1; Risk.SIN_RIESGO -> 0 }
+                val line = Insight("additive", "${a.code} ${a.name}", "${a.category} · ${a.risk.label}", sev)
+                if (sev >= 2) neg.add(line) else pos.add(line)
+            }
+        }
+
+        if (allergens.isNotEmpty())
+            neg.add(Insight("allergen", "Alergenos", allergens.joinToString(", "), 2))
+
         labels.forEach { l ->
             val low = l.lowercase()
-            if (low.contains("bio") || low.contains("organic") || low.contains("ecolog")) pos.add("Producto ecologico certificado")
-            if (low.contains("vegan")) pos.add("Apto para veganos")
-            if (low.contains("sin gluten") || low.contains("gluten free")) pos.add("Sin gluten")
-            if (low.contains("fairtrade") || low.contains("comercio justo")) pos.add("Comercio justo")
+            when {
+                low.contains("bio") || low.contains("organic") || low.contains("ecolog") ->
+                    pos.add(Insight("label", "Ecologico", "Certificacion ecologica", 0))
+                low.contains("vegan") -> pos.add(Insight("label", "Vegano", "Apto para veganos", 0))
+                low.contains("gluten") -> pos.add(Insight("label", "Sin gluten", "Apto para celiacos", 0))
+                low.contains("fairtrade") || low.contains("comercio justo") ->
+                    pos.add(Insight("label", "Comercio justo", "Certificacion Fairtrade", 0))
+            }
         }
+
+        val posFinal = pos.distinctBy { it.title + it.detail }.sortedBy { it.severity }
+        val negFinal = neg.distinctBy { it.title + it.detail }.sortedByDescending { it.severity }
 
         Product(barcode, name, brand, img, p.optString("quantity"), src, nutri, nova, eco,
             catTag, catList, catName, ingText, allergens, labels, additives, score,
-            pos.distinct(), neg.distinct(), nutrients, servingSize,
+            posFinal, negFinal, nutrients, servingSize,
             estimatePrice(catTag, p.optString("categories")),
             kcal, sugar, salt, sat, prot, fib)
     }

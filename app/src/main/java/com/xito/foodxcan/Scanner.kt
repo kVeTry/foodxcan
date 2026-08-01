@@ -18,12 +18,44 @@ object BarcodeUtils {
     }
 }
 
+/**
+ * Controla el escaneo continuo: confirma la lectura varias veces y evita
+ * volver a disparar el mismo codigo una y otra vez (bucle infinito).
+ */
+class ScanGate {
+    private var candidate: String? = null
+    private var repeats = 0
+    private var acceptedCode: String? = null
+    private var acceptedAt = 0L
+
+    /** Devuelve true solo cuando hay que lanzar la busqueda de ese codigo. */
+    fun offer(code: String, cooldownMs: Long = 4000L): Boolean {
+        // Confirmacion: el mismo codigo debe leerse 3 veces seguidas
+        if (code == candidate) repeats++ else { candidate = code; repeats = 1 }
+        if (repeats < 3) return false
+
+        val now = System.currentTimeMillis()
+        // Mismo producto que el ultimo aceptado: se ignora durante el tiempo de espera
+        if (code == acceptedCode && now - acceptedAt < cooldownMs) return false
+
+        acceptedCode = code
+        acceptedAt = now
+        repeats = 0
+        candidate = null
+        return true
+    }
+
+    fun reset() {
+        candidate = null; repeats = 0; acceptedCode = null; acceptedAt = 0L
+    }
+}
+
 object Beeper {
     private var tone: ToneGenerator? = null
     fun beep() {
         try {
             if (tone == null) tone = ToneGenerator(AudioManager.STREAM_NOTIFICATION, 80)
             tone?.startTone(ToneGenerator.TONE_PROP_BEEP, 150)
-        } catch (e: Exception) { /* sin sonido disponible */ }
+        } catch (e: Exception) { }
     }
 }

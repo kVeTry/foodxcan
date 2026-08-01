@@ -16,6 +16,8 @@ import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.gestures.draggable
@@ -125,6 +127,9 @@ fun App(dark: Boolean, onToggleDark: (Boolean) -> Unit) {
     var sound by remember { mutableStateOf(History.isSound(ctx)) }
     var update by remember { mutableStateOf<UpdateInfo?>(null) }
 
+    // La clave guardada se pasa al motor de IA al arrancar
+    LaunchedEffect(Unit) { AiRepo.groqKey = History.getGroqKey(ctx) }
+
     // Comprueba si hay una version nueva publicada en GitHub
     LaunchedEffect(Unit) {
         val version = try {
@@ -150,7 +155,7 @@ fun App(dark: Boolean, onToggleDark: (Boolean) -> Unit) {
             if (p == null) {
                 loading = false
                 guessLoading = true
-                val res = withTimeoutOrNull(60_000L) { AiRepo.identify(code) }
+                val res = withTimeoutOrNull(100_000L) { AiRepo.identify(code) }
                 guessLoading = false
                 val g = res?.first
                 val err = res?.second ?: "La IA ha tardado demasiado en responder."
@@ -184,7 +189,10 @@ fun App(dark: Boolean, onToggleDark: (Boolean) -> Unit) {
         "home" -> HomeScreen(dark, onToggleDark, sound,
             onToggleSound = { sound = it; History.setSound(ctx, it) },
             onScan = { screen = "scan"; sheetExpanded = false; product = null; error = null },
-            onManual = { load(it, false) }, onHistory = { screen = "history" })
+            onManual = { load(it, false) }, onHistory = { screen = "history" },
+            onSettings = { screen = "settings" })
+
+        "settings" -> SettingsScreen(onBack = { screen = "home" })
 
         "history" -> HistoryScreen(history, onOpen = { load(it, false) }, onBack = { screen = "home" },
             onClear = { History.clear(ctx); history = emptyList() })
@@ -249,8 +257,9 @@ fun UpdateDialog(u: UpdateInfo, onDismiss: () -> Unit, onSkip: () -> Unit) {
 // ==================== INICIO ====================
 @Composable
 fun HomeScreen(dark: Boolean, onToggleDark: (Boolean) -> Unit, sound: Boolean, onToggleSound: (Boolean) -> Unit,
-               onScan: () -> Unit, onManual: (String) -> Unit, onHistory: () -> Unit) {
+               onScan: () -> Unit, onManual: (String) -> Unit, onHistory: () -> Unit, onSettings: () -> Unit) {
     val pal = LocalPal.current
+    val ctxHome = LocalContext.current
     var manual by remember { mutableStateOf("") }
     val pulse = rememberInfiniteTransition(label = "pulse")
     val scale by pulse.animateFloat(1f, 1.06f,
@@ -268,6 +277,9 @@ fun HomeScreen(dark: Boolean, onToggleDark: (Boolean) -> Unit, sound: Boolean, o
             }
             IconButton(onClick = { onToggleDark(!dark) }) {
                 Icon(if (dark) Icons.Filled.LightMode else Icons.Filled.DarkMode, "Tema", tint = Lima)
+            }
+            IconButton(onClick = onSettings) {
+                Icon(Icons.Filled.Settings, "Ajustes", tint = Lima)
             }
         }
         Spacer(Modifier.height(28.dp))
@@ -317,9 +329,28 @@ fun HomeScreen(dark: Boolean, onToggleDark: (Boolean) -> Unit, sound: Boolean, o
                 Spacer(Modifier.width(8.dp))
                 Text("Historial de escaneos", color = pal.tinta)
             }
+            Spacer(Modifier.height(12.dp))
+            OutlinedButton(
+                onClick = {
+                    try {
+                        ctxHome.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW,
+                            android.net.Uri.parse("https://apps-xito.unocerobits.com")))
+                    } catch (e: Exception) { }
+                },
+                modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp),
+                border = androidx.compose.foundation.BorderStroke(1.dp, pal.borde),
+                colors = ButtonDefaults.outlinedButtonColors(containerColor = pal.superficie)
+            ) {
+                Icon(Icons.Filled.Apps, null, tint = Lima)
+                Spacer(Modifier.width(8.dp))
+                Text("Mas apps de Xito", color = pal.tinta)
+                Spacer(Modifier.width(6.dp))
+                Icon(Icons.Filled.OpenInNew, null, tint = pal.gris, modifier = Modifier.size(15.dp))
+            }
             Spacer(Modifier.weight(1f))
             Text("Alimentacion, cosmetica y mascotas", color = pal.gris, fontSize = 12.sp)
             Text("Datos: Open Food Facts", color = pal.gris, fontSize = 11.sp)
+            Text("Xito Development", color = pal.gris, fontSize = 11.sp, fontWeight = FontWeight.Medium)
             Spacer(Modifier.height(8.dp))
         }
     }
@@ -371,6 +402,139 @@ fun ScoreBadge(score: Int) {
     val c = scoreColor(score)
     Box(Modifier.size(44.dp).clip(CircleShape).background(c.copy(alpha = 0.16f)), contentAlignment = Alignment.Center) {
         Text("$score", color = c, fontWeight = FontWeight.Bold)
+    }
+}
+
+@Composable
+fun SettingsScreen(onBack: () -> Unit) {
+    val pal = LocalPal.current
+    val ctx = LocalContext.current
+    var key by remember { mutableStateOf(History.getGroqKey(ctx)) }
+    var guardado by remember { mutableStateOf(false) }
+    var probando by remember { mutableStateOf(false) }
+    var resultado by remember { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
+
+    Column(Modifier.fillMaxSize().background(pal.fondo)) {
+        Row(Modifier.statusBarsPadding().fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            IconButton(onClick = onBack) { Icon(Icons.Filled.ArrowBack, null, tint = pal.tinta) }
+            Text("Ajustes", color = pal.tinta, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+        }
+        Column(Modifier.padding(horizontal = 22.dp).verticalScroll(rememberScrollState())) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Filled.AutoAwesome, null, tint = pal.acento, modifier = Modifier.size(20.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("Analisis con IA", color = pal.tinta, fontSize = 17.sp, fontWeight = FontWeight.Bold)
+            }
+            Spacer(Modifier.height(8.dp))
+            Text("Sin clave, la app usa un servicio gratuito que a veces se satura. " +
+                 "Con una clave de Groq (gratis y sin tarjeta) el analisis va rapido y sin cortes.",
+                color = pal.gris, fontSize = 13.sp, lineHeight = 19.sp)
+
+            Spacer(Modifier.height(16.dp))
+            OutlinedTextField(
+                value = key,
+                onValueChange = { key = it.trim(); guardado = false; resultado = null },
+                placeholder = { Text("gsk_...", color = pal.gris) },
+                label = { Text("Clave de Groq", color = pal.gris) },
+                singleLine = true, shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth(),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedTextColor = pal.tinta, unfocusedTextColor = pal.tinta,
+                    focusedBorderColor = pal.acento, unfocusedBorderColor = pal.borde,
+                    cursorColor = pal.acento,
+                    focusedContainerColor = pal.superficie, unfocusedContainerColor = pal.superficie
+                )
+            )
+            Spacer(Modifier.height(12.dp))
+            Row {
+                Button(
+                    onClick = {
+                        History.setGroqKey(ctx, key); AiRepo.groqKey = key
+                        guardado = true; resultado = null
+                    },
+                    modifier = Modifier.weight(1f),
+                    colors = ButtonDefaults.buttonColors(containerColor = pal.acento),
+                    shape = RoundedCornerShape(14.dp)
+                ) {
+                    Text(if (guardado) "Guardado" else "Guardar",
+                        color = if (pal == DarkPal) Bosque else Color.White, fontWeight = FontWeight.SemiBold)
+                }
+                Spacer(Modifier.width(10.dp))
+                OutlinedButton(
+                    onClick = {
+                        History.setGroqKey(ctx, key); AiRepo.groqKey = key
+                        probando = true; resultado = null
+                        scope.launch {
+                            val r = withTimeoutOrNull(40_000L) { AiRepo.test() }
+                            resultado = when {
+                                r == null -> "Sin respuesta: ha tardado demasiado."
+                                r.startsWith("OK") -> "Funciona correctamente."
+                                else -> r
+                            }
+                            probando = false
+                        }
+                    },
+                    enabled = !probando, modifier = Modifier.weight(1f), shape = RoundedCornerShape(14.dp),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, pal.borde)
+                ) {
+                    if (probando) {
+                        CircularProgressIndicator(color = pal.acento, strokeWidth = 2.dp, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(8.dp)); Text("Probando", color = pal.tinta)
+                    } else Text("Probar", color = pal.tinta)
+                }
+            }
+            resultado?.let { r ->
+                Spacer(Modifier.height(12.dp))
+                val ok = r.startsWith("Funciona")
+                Card(colors = CardDefaults.cardColors(containerColor = (if (ok) Bueno else Malo).copy(alpha = 0.14f)),
+                    shape = RoundedCornerShape(14.dp), modifier = Modifier.fillMaxWidth()) {
+                    Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Icon(if (ok) Icons.Filled.CheckCircle else Icons.Filled.ErrorOutline, null,
+                            tint = if (ok) Bueno else Malo, modifier = Modifier.size(20.dp))
+                        Spacer(Modifier.width(10.dp))
+                        Text(r, color = pal.tinta, fontSize = 13.sp, lineHeight = 18.sp)
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(24.dp))
+            Text("Como conseguir la clave (gratis)", color = pal.tinta, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+            Spacer(Modifier.height(8.dp))
+            listOf(
+                "Entra en console.groq.com y crea una cuenta.",
+                "En el menu lateral abre API Keys.",
+                "Pulsa Create API Key y ponle un nombre.",
+                "Copiala en ese momento: solo se muestra una vez.",
+                "Pegala aqui arriba y pulsa Guardar."
+            ).forEachIndexed { i, paso ->
+                Row(Modifier.padding(vertical = 4.dp)) {
+                    Box(Modifier.size(22.dp).clip(CircleShape).background(pal.superficie2), contentAlignment = Alignment.Center) {
+                        Text("${i + 1}", color = pal.acento, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    }
+                    Spacer(Modifier.width(10.dp))
+                    Text(paso, color = pal.gris, fontSize = 13.sp, lineHeight = 19.sp)
+                }
+            }
+            Spacer(Modifier.height(12.dp))
+            Button(
+                onClick = {
+                    try {
+                        ctx.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW,
+                            android.net.Uri.parse("https://console.groq.com/keys")))
+                    } catch (e: Exception) { }
+                },
+                modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = pal.superficie2)
+            ) {
+                Icon(Icons.Filled.OpenInNew, null, tint = pal.acento, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("Abrir console.groq.com", color = pal.tinta)
+            }
+            Spacer(Modifier.height(12.dp))
+            Text("La clave se guarda solo en tu movil. El plan gratuito permite unas 1.000 consultas al dia.",
+                color = pal.gris, fontSize = 11.sp, lineHeight = 16.sp)
+            Spacer(Modifier.height(30.dp))
+        }
     }
 }
 
@@ -774,7 +938,7 @@ fun ProductDetail(p: Product, alternatives: List<Alternative>, alerts: List<Food
                     onClick = {
                         aiLoading = true; aiState = null
                         scope.launch {
-                            aiState = withTimeoutOrNull(75_000L) { AiRepo.analyze(p) }
+                            aiState = withTimeoutOrNull(120_000L) { AiRepo.analyze(p) }
                                 ?: AiRepo.Result.Error("La IA ha tardado demasiado. Intentalo de nuevo.")
                             aiLoading = false
                         }
@@ -786,7 +950,7 @@ fun ProductDetail(p: Product, alternatives: List<Alternative>, alerts: List<Food
                     val txtColor = if (pal == DarkPal) Bosque else Color.White
                     if (aiLoading) {
                         CircularProgressIndicator(color = txtColor, strokeWidth = 2.dp, modifier = Modifier.size(18.dp))
-                        Spacer(Modifier.width(10.dp)); Text("Analizando...", color = pal.tinta)
+                        Spacer(Modifier.width(10.dp)); Text("Analizando, puede tardar...", color = pal.tinta)
                     } else {
                         Icon(Icons.Filled.AutoAwesome, null, tint = txtColor, modifier = Modifier.size(20.dp))
                         Spacer(Modifier.width(10.dp)); Text("Analisis con IA", color = txtColor, fontWeight = FontWeight.SemiBold)
@@ -810,7 +974,32 @@ fun ProductDetail(p: Product, alternatives: List<Alternative>, alerts: List<Food
                                             Spacer(Modifier.height(8.dp))
                                             Text("Generado por IA. Puede contener errores.", color = pal.gris, fontSize = 11.sp)
                                         }
-                                        is AiRepo.Result.Error -> Text(st.message, color = Malo, fontSize = 14.sp)
+                                        is AiRepo.Result.Error -> Column {
+                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                Icon(Icons.Filled.CloudOff, null, tint = Malo, modifier = Modifier.size(18.dp))
+                                                Spacer(Modifier.width(8.dp))
+                                                Text("No se pudo analizar", color = Malo, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                                            }
+                                            Spacer(Modifier.height(6.dp))
+                                            Text(st.message, color = pal.gris, fontSize = 13.sp, lineHeight = 18.sp)
+                                            Spacer(Modifier.height(10.dp))
+                                            OutlinedButton(
+                                                onClick = {
+                                                    aiLoading = true; aiState = null
+                                                    scope.launch {
+                                                        aiState = withTimeoutOrNull(120_000L) { AiRepo.analyze(p) }
+                                                            ?: AiRepo.Result.Error("La IA ha tardado demasiado. Intentalo de nuevo.")
+                                                        aiLoading = false
+                                                    }
+                                                },
+                                                shape = RoundedCornerShape(12.dp),
+                                                border = androidx.compose.foundation.BorderStroke(1.dp, pal.borde)
+                                            ) {
+                                                Icon(Icons.Filled.Refresh, null, tint = pal.tinta, modifier = Modifier.size(16.dp))
+                                                Spacer(Modifier.width(6.dp))
+                                                Text("Reintentar", color = pal.tinta, fontSize = 13.sp)
+                                            }
+                                        }
                                     }
                                 }
                             }

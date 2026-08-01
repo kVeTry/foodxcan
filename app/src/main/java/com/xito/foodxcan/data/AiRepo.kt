@@ -16,72 +16,105 @@ object AiRepo {
         .readTimeout(35, TimeUnit.SECONDS)
         .build()
 
-    // Clave de Pollinations. Regenerable en enter.pollinations.ai
-    private const val TOKEN = "sk_ZhE6E7VeR6hHdut0gVXvDEszN4H5QgqJ"
+    // Clave de Pollinations (respaldo gratuito sin registro)
+    private const val POLLI_TOKEN = "sk_ZhE6E7VeR6hHdut0gVXvDEszN4H5QgqJ"
 
-    // Endpoints compatibles con OpenAI. gen.pollinations.ai es el host unificado actual.
-    private val ENDPOINTS = listOf(
-        "https://gen.pollinations.ai/v1/chat/completions",
-        "https://text.pollinations.ai/openai"
+    // Clave de Groq del usuario. Se rellena al abrir la app desde los ajustes.
+    @Volatile var groqKey: String = ""
+
+    private const val GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
+    // Los nombres de modelo cambian con el tiempo: se prueban en orden
+    private val GROQ_MODELS = listOf(
+        "llama-3.3-70b-versatile",
+        "llama-3.1-8b-instant",
+        "openai/gpt-oss-120b"
     )
-    private val FREE_MODELS = listOf("mistral", "openai-fast", "gpt-oss")
+
+    private data class Provider(val url: String, val token: String, val models: List<String>, val name: String)
+
+    private fun providers(): List<Provider> = buildList {
+        // Groq primero: es rapido y estable si hay clave
+        if (groqKey.isNotBlank()) add(Provider(GROQ_URL, groqKey, GROQ_MODELS, "Groq"))
+        // Pollinations como respaldo gratuito
+        add(Provider("https://text.pollinations.ai/openai", POLLI_TOKEN, listOf("mistral", "openai-fast"), "Pollinations"))
+        add(Provider("https://gen.pollinations.ai/v1/chat/completions", POLLI_TOKEN, listOf("mistral"), "Pollinations"))
+    }
 
     sealed class Result {
         data class Ok(val text: String) : Result()
         data class Error(val message: String) : Result()
     }
 
-    // ---------- Llamada generica con reintentos ----------
-    private fun ask(prompt: String, maxTokens: Int = 900): Result {
-        var lastError = "No se pudo conectar con la IA."
-        for (endpoint in ENDPOINTS) {
-            for (model in FREE_MODELS) {
-                val body = JSONObject().apply {
-                    put("model", model)
-                    put("max_tokens", maxTokens)
-                    put("messages", JSONArray().put(JSONObject().apply {
-                        put("role", "user"); put("content", prompt)
-                    }))
-                    put("private", true)
-                }
-                val req = Request.Builder()
-                    .url(endpoint)
-                    .header("content-type", "application/json")
-                    .header("Authorization", "Bearer $TOKEN")
-                    .post(body.toString().toRequestBody("application/json".toMediaType()))
-                    .build()
-                try {
-                    http.newCall(req).execute().use { r ->
-                        val raw = r.body?.string().orEmpty()
-                        if (r.isSuccessful) {
-                            val text = try {
-                                JSONObject(raw).getJSONArray("choices").getJSONObject(0)
-                                    .getJSONObject("message").getString("content").trim()
-                            } catch (e: Exception) { raw.trim() }
-                            if (text.isNotEmpty()) return Result.Ok(text)
-                            lastError = "La IA no devolvio texto."
-                        } else {
-                            lastError = when (r.code) {
-                                402 -> "Modelo de pago, probando otro..."
-                                429 -> "Servicio de IA saturado. Prueba en unos segundos."
-                                401, 403 -> "Clave de IA no valida."
-                                else -> "Error del servicio de IA (${r.code})."
-                            }
-                            if (r.code == 429) return Result.Error(lastError)
-                        }
-                    }
-                } catch (e: Exception) {
-                    val msg = e.message.orEmpty()
-                    if (msg.contains("resolve host") || msg.contains("Unable to resolve")) {
-                        // El servidor no existe o no hay red: se salta al siguiente endpoint
-                        lastError = "Sin conexion a internet o servidor de IA no disponible."
-                        break
-                    }
-                    lastError = "No se pudo conectar con la IA: $msg"
+    private fun postOnce(p: Provider, model: String, prompt: String, maxTokens: Int): Pair<String?, String> {
+        val body = JSONObject().apply {
+            put("model", model)
+            put("max_tokens", maxTokens)
+            put("temperature", 0.4)
+            put("messages", JSONArray().put(JSONObject().apply {
+                put("role", "user"); put("content", prompt)
+            }))
+        }
+        val builder = Request.Builder().url(p.url)
+            .header("content-type", "application/json")
+            .post(body.toString().toRequestBody("application/json".toMediaType()))
+        if (p.token.isNotBlank()) builder.header("Authorization", "Bearer ${p.token}")
+
+        return try {
+            http.newCall(builder.build()).execute().use { r ->
+                val raw = r.body?.string().orEmpty()
+                if (r.isSuccessful) {
+                    val text = try {
+                        JSONObject(raw).getJSONArray("choices").getJSONObject(0)
+                            .getJSONObject("message").getString("content").trim()
+                    } catch (e: Exception) { raw.trim() }
+                    if (text.isNotEmpty()) text to "" else null to "respuesta vacia"
+                } else {
+                    val detalle = try { JSONObject(raw).getJSONObject("error").getString("message") } catch (e: Exception) { "" }
+                    null to "http ${r.code} ${detalle.take(80)}"
                 }
             }
+        } catch (e: Exception) {
+            null to (e.message ?: "error de red")
         }
-        return Result.Error(lastError)
+    }
+
+    private fun ask(prompt: String, maxTokens: Int = 900): Result {
+        var saturado = false; var sinRed = false; var claveMal = false
+        var ultimo = ""
+
+        repeat(2) { intento ->
+            for (p in providers()) {
+                for (m in p.models) {
+                    val (text, err) = postOnce(p, m, prompt, maxTokens)
+                    if (text != null) return Result.Ok(text)
+                    ultimo = err
+                    when {
+                        err.contains("429") -> saturado = true
+                        err.contains("401") || err.contains("403") -> if (p.name == "Groq") claveMal = true
+                        err.contains("resolve host", true) || err.contains("Unable to resolve", true) ||
+                        err.contains("timeout", true) || err.contains("timed out", true) -> sinRed = true
+                    }
+                }
+            }
+            if (intento == 0) try { Thread.sleep(3000) } catch (e: InterruptedException) { }
+        }
+
+        return Result.Error(
+            when {
+                claveMal -> "La clave de Groq no es valida. Revisala en Ajustes."
+                saturado -> "Limite de peticiones alcanzado. Espera un minuto y vuelve a intentarlo."
+                sinRed -> "No hay conexion con el servicio de IA. Comprueba tu internet."
+                else -> "El servicio de IA no responde ($ultimo)."
+            }
+        )
+    }
+
+    /** Comprueba que la IA responde. Devuelve "OK ..." o el motivo del fallo. */
+    suspend fun test(): String = withContext(Dispatchers.IO) {
+        when (val r = ask("Responde unicamente con la palabra: correcto", 20)) {
+            is Result.Ok -> "OK: ${r.text.take(40)}"
+            is Result.Error -> r.message
+        }
     }
 
     // ---------- Analisis de un producto ya conocido ----------

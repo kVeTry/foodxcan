@@ -59,6 +59,10 @@ object History {
     fun getSkippedVersion(ctx: Context) = prefs(ctx).getString("skip_version", "") ?: ""
     fun setSkippedVersion(ctx: Context, v: String) = prefs(ctx).edit().putString("skip_version", v).apply()
 
+    // Clave de Groq para el analisis con IA
+    fun getGroqKey(ctx: Context) = prefs(ctx).getString("groq_key", "") ?: ""
+    fun setGroqKey(ctx: Context, v: String) = prefs(ctx).edit().putString("groq_key", v).apply()
+
     // Sonido al escanear
     fun isSound(ctx: Context) = prefs(ctx).getBoolean("sound", true)
     fun setSound(ctx: Context, v: Boolean) = prefs(ctx).edit().putBoolean("sound", v).apply()

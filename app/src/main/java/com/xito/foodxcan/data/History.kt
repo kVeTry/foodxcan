@@ -55,6 +55,10 @@ object History {
     fun isDark(ctx: Context) = prefs(ctx).getBoolean("dark", false)
     fun setDark(ctx: Context, v: Boolean) = prefs(ctx).edit().putBoolean("dark", v).apply()
 
+    // Version de actualizacion omitida por el usuario
+    fun getSkippedVersion(ctx: Context) = prefs(ctx).getString("skip_version", "") ?: ""
+    fun setSkippedVersion(ctx: Context, v: String) = prefs(ctx).edit().putString("skip_version", v).apply()
+
     // Sonido al escanear
     fun isSound(ctx: Context) = prefs(ctx).getBoolean("sound", true)
     fun setSound(ctx: Context, v: Boolean) = prefs(ctx).edit().putBoolean("sound", v).apply()

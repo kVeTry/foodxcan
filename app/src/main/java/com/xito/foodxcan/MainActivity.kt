@@ -52,6 +52,7 @@ import com.google.mlkit.vision.barcode.BarcodeScanning
 import com.google.mlkit.vision.common.InputImage
 import com.xito.foodxcan.data.*
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import java.text.SimpleDateFormat
 import java.util.*
 import java.util.concurrent.Executors
@@ -122,6 +123,16 @@ fun App(dark: Boolean, onToggleDark: (Boolean) -> Unit) {
     var error by remember { mutableStateOf<String?>(null) }
     var history by remember { mutableStateOf(History.load(ctx)) }
     var sound by remember { mutableStateOf(History.isSound(ctx)) }
+    var update by remember { mutableStateOf<UpdateInfo?>(null) }
+
+    // Comprueba si hay una version nueva publicada en GitHub
+    LaunchedEffect(Unit) {
+        val version = try {
+            ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName ?: "1.0"
+        } catch (e: Exception) { "1.0" }
+        val u = Updates.check(version)
+        if (u != null && u.version != History.getSkippedVersion(ctx)) update = u
+    }
     var sheetExpanded by remember { mutableStateOf(false) }
     var guess by remember { mutableStateOf<AiRepo.Guess?>(null) }
     var guessLoading by remember { mutableStateOf(false) }
@@ -139,10 +150,12 @@ fun App(dark: Boolean, onToggleDark: (Boolean) -> Unit) {
             if (p == null) {
                 loading = false
                 guessLoading = true
-                val (g, err) = AiRepo.identify(code)
+                val res = withTimeoutOrNull(60_000L) { AiRepo.identify(code) }
                 guessLoading = false
+                val g = res?.first
+                val err = res?.second ?: "La IA ha tardado demasiado en responder."
                 if (g != null && g.name.lowercase() != "desconocido") guess = g
-                else error = err ?: "No encontramos el producto ni la IA supo identificarlo.\n\nCodigo: $code"
+                else error = "No encontramos el producto ni la IA supo identificarlo.\n\nCodigo: $code\n\n$err"
             } else {
                 product = p
                 History.add(ctx, p); history = History.load(ctx)
@@ -159,6 +172,12 @@ fun App(dark: Boolean, onToggleDark: (Boolean) -> Unit) {
         product = p; guess = null
         History.add(ctx, p); history = History.load(ctx)
         sheetExpanded = true
+    }
+
+    update?.let { u ->
+        UpdateDialog(u,
+            onDismiss = { update = null },
+            onSkip = { History.setSkippedVersion(ctx, u.version); update = null })
     }
 
     when (screen) {
@@ -188,6 +207,43 @@ fun App(dark: Boolean, onToggleDark: (Boolean) -> Unit) {
                 onAlternative = { load(it, false) })
         }
     }
+}
+
+@Composable
+fun UpdateDialog(u: UpdateInfo, onDismiss: () -> Unit, onSkip: () -> Unit) {
+    val pal = LocalPal.current
+    val ctx = LocalContext.current
+    fun abrir(url: String) {
+        try {
+            ctx.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(url)))
+        } catch (e: Exception) { }
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = pal.superficie,
+        icon = { Icon(Icons.Filled.SystemUpdate, null, tint = pal.acento, modifier = Modifier.size(32.dp)) },
+        title = { Text("Nueva version disponible", color = pal.tinta, fontWeight = FontWeight.Bold) },
+        text = {
+            Column {
+                Text("Foodxcan ${u.version} ya esta publicada.", color = pal.tinta, fontSize = 14.sp)
+                if (u.notes.isNotBlank()) {
+                    Spacer(Modifier.height(10.dp))
+                    Text(u.notes, color = pal.gris, fontSize = 12.sp, lineHeight = 17.sp, maxLines = 10)
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { abrir(u.apkUrl ?: u.url); onDismiss() }) {
+                Text(if (u.apkUrl != null) "Descargar" else "Ver release", color = pal.acento, fontWeight = FontWeight.Bold)
+            }
+        },
+        dismissButton = {
+            Row {
+                TextButton(onClick = onSkip) { Text("Omitir", color = pal.gris) }
+                TextButton(onClick = onDismiss) { Text("Luego", color = pal.gris) }
+            }
+        }
+    )
 }
 
 // ==================== INICIO ====================
@@ -717,7 +773,11 @@ fun ProductDetail(p: Product, alternatives: List<Alternative>, alerts: List<Food
                 Button(
                     onClick = {
                         aiLoading = true; aiState = null
-                        scope.launch { aiState = AiRepo.analyze(p); aiLoading = false }
+                        scope.launch {
+                            aiState = withTimeoutOrNull(75_000L) { AiRepo.analyze(p) }
+                                ?: AiRepo.Result.Error("La IA ha tardado demasiado. Intentalo de nuevo.")
+                            aiLoading = false
+                        }
                     },
                     enabled = !aiLoading,
                     colors = ButtonDefaults.buttonColors(containerColor = pal.acento, disabledContainerColor = pal.superficie2),

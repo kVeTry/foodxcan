@@ -12,8 +12,8 @@ import java.util.concurrent.TimeUnit
 
 object AiRepo {
     private val http = OkHttpClient.Builder()
-        .connectTimeout(15, TimeUnit.SECONDS)
-        .readTimeout(90, TimeUnit.SECONDS)
+        .connectTimeout(8, TimeUnit.SECONDS)
+        .readTimeout(35, TimeUnit.SECONDS)
         .build()
 
     // Clave de Pollinations. Regenerable en enter.pollinations.ai
@@ -24,7 +24,7 @@ object AiRepo {
         "https://gen.pollinations.ai/v1/chat/completions",
         "https://text.pollinations.ai/openai"
     )
-    private val FREE_MODELS = listOf("mistral", "openai-fast", "gpt-oss", "llama", "deepseek")
+    private val FREE_MODELS = listOf("mistral", "openai-fast", "gpt-oss")
 
     sealed class Result {
         data class Ok(val text: String) : Result()
@@ -71,9 +71,13 @@ object AiRepo {
                         }
                     }
                 } catch (e: Exception) {
-                    lastError = if (e.message?.contains("resolve host") == true)
-                        "Sin conexion a internet o servidor de IA no disponible."
-                    else "No se pudo conectar con la IA: ${e.message}"
+                    val msg = e.message.orEmpty()
+                    if (msg.contains("resolve host") || msg.contains("Unable to resolve")) {
+                        // El servidor no existe o no hay red: se salta al siguiente endpoint
+                        lastError = "Sin conexion a internet o servidor de IA no disponible."
+                        break
+                    }
+                    lastError = "No se pudo conectar con la IA: $msg"
                 }
             }
         }

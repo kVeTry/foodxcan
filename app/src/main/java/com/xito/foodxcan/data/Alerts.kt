@@ -64,17 +64,37 @@ object Alerts {
             .execute().use { r -> if (r.isSuccessful) r.body?.string() else null }
     } catch (e: Exception) { null }
 
+    /** Decodifica entidades HTML: &oacute;, &#243;, &#xF3;, etc. */
+    private fun decodeEntities(t: String): String {
+        var out = t
+        val named = mapOf(
+            "aacute" to "á", "eacute" to "é", "iacute" to "í", "oacute" to "ó", "uacute" to "ú",
+            "Aacute" to "Á", "Eacute" to "É", "Iacute" to "Í", "Oacute" to "Ó", "Uacute" to "Ú",
+            "ntilde" to "ñ", "Ntilde" to "Ñ", "uuml" to "ü", "Uuml" to "Ü",
+            "agrave" to "à", "egrave" to "è", "ccedil" to "ç", "amp" to "&", "nbsp" to " ",
+            "quot" to "\"", "apos" to "'", "lt" to "<", "gt" to ">", "deg" to "°",
+            "ordm" to "º", "ordf" to "ª", "laquo" to "«", "raquo" to "»", "middot" to "·",
+            "mdash" to "—", "ndash" to "–", "hellip" to "…", "euro" to "€", "reg" to "®", "trade" to "™"
+        )
+        named.forEach { (k, v) -> out = out.replace("&$k;", v) }
+        // Numericas decimales &#243; y hexadecimales &#xF3;
+        out = Regex("&#(\\d+);").replace(out) { m ->
+            m.groupValues[1].toIntOrNull()?.toChar()?.toString() ?: m.value
+        }
+        out = Regex("(?i)&#x([0-9a-f]+);").replace(out) { m ->
+            m.groupValues[1].toIntOrNull(16)?.toChar()?.toString() ?: m.value
+        }
+        return out
+    }
+
     /** Convierte el HTML en texto con saltos de linea por bloque. */
-    private fun htmlToLines(html: String): List<String> = html
-        .replace(Regex("(?i)<br\\s*/?>"), "\n")
-        .replace(Regex("(?i)</(li|p|td|tr|div|h\\d)>"), "\n")
-        .replace(Regex("(?s)<script.*?</script>"), " ")
-        .replace(Regex("(?s)<style.*?</style>"), " ")
-        .replace(Regex("<[^>]*>"), "")
-        .replace("&nbsp;", " ").replace("&amp;", "&").replace("&aacute;", "a")
-        .replace("&eacute;", "e").replace("&iacute;", "i").replace("&oacute;", "o")
-        .replace("&uacute;", "u").replace("&ntilde;", "n").replace("&#243;", "o")
-        .split("\n").map { it.replace(Regex("\\s+"), " ").trim() }.filter { it.isNotBlank() }
+    private fun htmlToLines(html: String): List<String> = decodeEntities(
+        html.replace(Regex("(?i)<br\\s*/?>"), "\n")
+            .replace(Regex("(?i)</(li|p|td|tr|div|h\\d)>"), "\n")
+            .replace(Regex("(?s)<script.*?</script>"), " ")
+            .replace(Regex("(?s)<style.*?</style>"), " ")
+            .replace(Regex("<[^>]*>"), "")
+    ).split("\n").map { it.replace(Regex("\\s+"), " ").trim() }.filter { it.isNotBlank() }
 
     // ---------- Listado ----------
     private fun fetchListing(url: String, source: String): List<FoodAlert> {
@@ -83,8 +103,8 @@ object Alerts {
             setOf(RegexOption.DOT_MATCHES_ALL, RegexOption.IGNORE_CASE))
         return rx.findAll(html).mapNotNull { m ->
             val href = m.groupValues[1]
-            val text = m.groupValues[2].replace(Regex("<[^>]*>"), " ")
-                .replace("&nbsp;", " ").replace(Regex("\\s+"), " ").trim()
+            val text = decodeEntities(m.groupValues[2].replace(Regex("<[^>]*>"), " "))
+                .replace(Regex("\\s+"), " ").trim()
             if (text.length < 15) null
             else FoodAlert(text, if (href.startsWith("http")) href else BASE + href, source)
         }.distinctBy { it.url }.toList()
@@ -142,39 +162,68 @@ object Alerts {
     // ---------- Cruce con el producto escaneado ----------
     private fun sig(s: String) = norm(s).split(" ").filter { it.length > 3 && it !in STOP }.toSet()
 
+    /** Alimentos concretos: solo estos sirven para afirmar que hay coincidencia de tipo. */
+    private val FOOD_TERMS = setOf(
+        "salchichon", "chorizo", "fuet", "lomo", "jamon", "salchicha", "morcilla", "sobrasada",
+        "queso", "quesos", "yogur", "yogures", "leche", "mantequilla", "nata", "cuajada", "kefir",
+        "atun", "salmon", "bacalao", "merluza", "anchoa", "anchoas", "sardina", "sardinas",
+        "gamba", "gambas", "langostino", "langostinos", "mejillon", "mejillones", "almeja",
+        "pulpo", "calamar", "boqueron", "boquerones", "trucha", "pez", "marisco",
+        "pollo", "pavo", "cerdo", "ternera", "vacuno", "cordero", "conejo", "hamburguesa",
+        "huevo", "huevos", "tortilla", "pate", "foie",
+        "chocolate", "cacao", "galleta", "galletas", "bolleria", "bizcocho", "magdalena",
+        "helado", "helados", "tarta", "pastel", "turron", "polvoron", "caramelo", "gominola",
+        "pan", "harina", "pasta", "arroz", "cereal", "cereales", "avena", "muesli", "tostada",
+        "aceite", "aceituna", "aceitunas", "vinagre", "salsa", "mayonesa", "ketchup", "mostaza",
+        "hummus", "guacamole", "tomate", "pimiento", "pimenton", "especias", "curcuma", "canela",
+        "pistacho", "pistachos", "cacahuete", "cacahuetes", "almendra", "almendras", "nuez",
+        "nueces", "avellana", "avellanas", "anacardo", "anacardos", "sesamo", "semillas",
+        "pipas", "frutos", "datil", "datiles", "pasas", "higo", "higos", "orejones",
+        "zumo", "refresco", "bebida", "agua", "cerveza", "vino", "sidra", "infusion", "cafe",
+        "verdura", "verduras", "espinaca", "espinacas", "lechuga", "rucula", "canonigos",
+        "legumbre", "legumbres", "garbanzo", "garbanzos", "lenteja", "lentejas", "alubia",
+        "judias", "soja", "tofu", "seitan", "pizza", "empanada", "croqueta", "croquetas",
+        "sopa", "caldo", "gazpacho", "conserva", "pescado", "carne", "embutido", "fiambre",
+        "mermelada", "miel", "azucar", "sal", "gel", "champu", "crema", "locion", "pienso"
+    )
+
+    /** Palabras del producto que aparecen en el texto de la alerta. */
+    private fun foodOverlap(prodWords: Set<String>, alertWords: Set<String>): Int =
+        prodWords.count { w -> w in FOOD_TERMS && alertWords.any { k -> k == w || k.startsWith(w.take(5)) } }
+
     suspend fun matchFor(p: Product): List<FoodAlert> = coroutineScope {
         val listing = loadListing()
         if (listing.isEmpty()) return@coroutineScope emptyList()
 
         val prodWords = sig(listOfNotNull(p.name, p.categoryName).joinToString(" "))
         val brandNorm = norm(p.brand)
+        if (prodWords.isEmpty() && brandNorm.isBlank()) return@coroutineScope emptyList()
 
-        // 1) Preseleccion barata por el titulo del listado
+        // 1) Preseleccion: la alerta debe mencionar un alimento concreto del producto
         val candidates = listing.mapNotNull { a ->
             val keys = sig(a.title)
-            val hits = keys.count { k -> prodWords.any { w -> w == k || (k.length > 5 && w.startsWith(k.take(5))) } }
-            if (hits >= 1) a to hits else null
-        }.sortedByDescending { it.second }.take(12).map { it.first }
+            val food = foodOverlap(prodWords, keys)
+            if (food >= 1) a to food else null
+        }.sortedByDescending { it.second }.take(10).map { it.first }
         if (candidates.isEmpty()) return@coroutineScope emptyList()
 
         // 2) Se abren las fichas para leer marca, nombre exacto y lote
         val details = candidates.map { async(Dispatchers.IO) { fetchDetail(it) } }.map { it.await() }
 
-        // 3) Puntuacion: marca coincidente pesa mucho mas que el tipo de alimento
+        // 3) Coincidencia estricta: la marca manda; si no, el alimento debe coincidir de verdad
         details.mapNotNull { d ->
             val aBrand = norm(d.brand)
-            val brandOk = brandNorm.isNotBlank() && aBrand.isNotBlank() &&
-                (aBrand.contains(brandNorm) || brandNorm.contains(aBrand)) && brandNorm.length >= 3
-            val nameWords = sig(d.productName.ifBlank { d.title })
-            val nameHits = nameWords.count { k -> prodWords.any { w -> w == k || (k.length > 5 && w.startsWith(k.take(5))) } }
+            val brandOk = brandNorm.length >= 4 && aBrand.length >= 4 &&
+                (aBrand == brandNorm || aBrand.contains(brandNorm) || brandNorm.contains(aBrand))
+            val alertWords = sig(d.productName.ifBlank { d.title })
+            val food = foodOverlap(prodWords, alertWords)
 
             when {
-                brandOk && nameHits >= 1 -> d.copy(matchLevel = 2)
-                brandOk -> d.copy(matchLevel = 2)
-                nameHits >= 2 -> d.copy(matchLevel = 1)
-                else -> null
+                brandOk && food >= 1 -> d.copy(matchLevel = 2)   // marca + alimento: casi seguro
+                food >= 2 -> d.copy(matchLevel = 1)              // dos alimentos coincidentes
+                else -> null                                     // el resto se descarta
             }
-        }.sortedByDescending { it.matchLevel }.take(4)
+        }.sortedByDescending { it.matchLevel }.take(3)
     }
 
     // ---------- Sustancias prohibidas o vigiladas ----------

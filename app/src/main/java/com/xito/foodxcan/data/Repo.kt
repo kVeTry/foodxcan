@@ -199,8 +199,11 @@ object Repo {
             }
         }
         fat?.let {
-            if (it > 20) neg.add(Insight("fat", "Grasas", "Cantidad elevada · ${fmt(it)} g", 2))
-            else if (it < 3) pos.add(Insight("fat", "Grasas", "Poca cantidad · ${fmt(it)} g", 0))
+            when {
+                it > 20 -> neg.add(Insight("fat", "Grasas", "Cantidad elevada · ${fmt(it)} g", 2))
+                it < 3 -> pos.add(Insight("fat", "Grasas", "Poca cantidad · ${fmt(it)} g", 0))
+                else -> {}
+            }
         }
         kcal?.let {
             when {
@@ -211,12 +214,18 @@ object Repo {
             }
         }
         fib?.let {
-            if (it >= 6) pos.add(Insight("fiber", "Fibra", "Cantidad excelente · ${fmt(it)} g", 0))
-            else if (it >= 3) pos.add(Insight("fiber", "Fibra", "Buena cantidad · ${fmt(it)} g", 0))
+            when {
+                it >= 6 -> pos.add(Insight("fiber", "Fibra", "Cantidad excelente · ${fmt(it)} g", 0))
+                it >= 3 -> pos.add(Insight("fiber", "Fibra", "Buena cantidad · ${fmt(it)} g", 0))
+                else -> {}
+            }
         }
         prot?.let {
-            if (it >= 12) pos.add(Insight("protein", "Proteinas", "Cantidad excelente · ${fmt(it)} g", 0))
-            else if (it >= 8) pos.add(Insight("protein", "Proteinas", "Buena cantidad · ${fmt(it)} g", 0))
+            when {
+                it >= 12 -> pos.add(Insight("protein", "Proteinas", "Cantidad excelente · ${fmt(it)} g", 0))
+                it >= 8 -> pos.add(Insight("protein", "Proteinas", "Buena cantidad · ${fmt(it)} g", 0))
+                else -> {}
+            }
         }
 
         if (additives.isEmpty()) {

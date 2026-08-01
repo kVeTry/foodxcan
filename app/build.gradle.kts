@@ -3,6 +3,13 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
+// La version sale de la etiqueta de git (ej. v1.3 -> versionName 1.3, versionCode 103)
+val tagName: String = (System.getenv("FOODXCAN_VERSION") ?: "1.0").trimStart('v', 'V')
+val tagParts = tagName.split(".", "-").mapNotNull { it.takeWhile { c -> c.isDigit() }.toIntOrNull() }
+val vCode = (tagParts.getOrElse(0) { 1 }) * 10000 +
+            (tagParts.getOrElse(1) { 0 }) * 100 +
+            (tagParts.getOrElse(2) { 0 })
+
 android {
     namespace = "com.xito.foodxcan"
     compileSdk = 34
@@ -11,12 +18,27 @@ android {
         applicationId = "com.xito.foodxcan"
         minSdk = 24
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = vCode
+        versionName = tagName
+    }
+
+    // Clave fija: sin esto cada compilacion firma distinto y Android
+    // rechaza la instalacion con "conflicto con el paquete existente"
+    signingConfigs {
+        create("foodxcan") {
+            storeFile = file("../foodxcan.keystore")
+            storePassword = "foodxcan"
+            keyAlias = "foodxcan"
+            keyPassword = "foodxcan"
+        }
     }
 
     buildTypes {
-        release { isMinifyEnabled = false }
+        debug { signingConfig = signingConfigs.getByName("foodxcan") }
+        release {
+            isMinifyEnabled = false
+            signingConfig = signingConfigs.getByName("foodxcan")
+        }
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17

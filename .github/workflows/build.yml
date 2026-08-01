@@ -3,7 +3,11 @@ name: Compilar APK
 on:
   push:
     branches: [ main ]
+    tags: [ 'v*' ]
   workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -17,20 +21,52 @@ jobs:
           distribution: temurin
           java-version: 17
 
-      - name: Aceptar licencias del SDK de Android
-        run: yes | sdkmanager --licenses >/dev/null 2>&1 || true
+      - name: Determinar version
+        id: ver
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            V="${GITHUB_REF#refs/tags/}"
+          else
+            V="1.0.${GITHUB_RUN_NUMBER}"
+          fi
+          echo "version=${V}" >> $GITHUB_OUTPUT
+          echo "Version: ${V}"
+
+      # foodxcan.keystore va incluido en el repositorio: al ser siempre
+      # la misma clave, el APK se firma igual y se puede instalar encima
+      - name: Comprobar clave de firma
+        run: |
+          if [ ! -f foodxcan.keystore ]; then
+            echo "Falta foodxcan.keystore en la raiz del repositorio"; exit 1
+          fi
 
       - name: Configurar Gradle
         uses: gradle/actions/setup-gradle@v3
         with:
           gradle-version: 8.7
 
-      - name: Compilar APK (debug)
-        run: gradle assembleDebug --no-daemon --stacktrace
+      - name: Compilar APK
+        env:
+          FOODXCAN_VERSION: ${{ steps.ver.outputs.version }}
+        run: gradle assembleRelease --no-daemon --stacktrace
 
-      - name: Subir APK
-        if: success()
+      - name: Renombrar APK
+        run: |
+          mkdir -p out
+          cp app/build/outputs/apk/release/app-release.apk \
+             out/Foodxcan-${{ steps.ver.outputs.version }}.apk
+
+      - name: Subir APK como artefacto
         uses: actions/upload-artifact@v4
         with:
           name: Foodxcan-APK
-          path: app/build/outputs/apk/debug/app-debug.apk
+          path: out/*.apk
+
+      - name: Publicar release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ver.outputs.version }}
+          name: Foodxcan ${{ steps.ver.outputs.version }}
+          files: out/*.apk
+          generate_release_notes: true

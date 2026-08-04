@@ -128,7 +128,11 @@ fun App(dark: Boolean, onToggleDark: (Boolean) -> Unit) {
     var update by remember { mutableStateOf<UpdateInfo?>(null) }
 
     // La clave guardada se pasa al motor de IA al arrancar
-    LaunchedEffect(Unit) { AiRepo.groqKey = History.getGroqKey(ctx) }
+    LaunchedEffect(Unit) {
+        AiRepo.groqKey = History.getGroqKey(ctx)
+        AiRepo.nvidiaKey = History.getNvidiaKey(ctx)
+        AiRepo.nvidiaModel = History.getNvidiaModel(ctx)
+    }
 
     // Comprueba si hay una version nueva publicada en GitHub
     LaunchedEffect(Unit) {
@@ -202,6 +206,8 @@ fun App(dark: Boolean, onToggleDark: (Boolean) -> Unit) {
             product = product, alternatives = alternatives, loading = loading, error = error,
             alerts = alerts, guess = guess, guessLoading = guessLoading, barcode = lastCode,
             onAcceptGuess = { acceptGuess() },
+            onRetry = { val c = lastCode; lastCode = ""; if (c.isNotBlank()) load(c, false) },
+            onOpenSettings = { screen = "settings" },
             expanded = sheetExpanded, onExpandedChange = { sheetExpanded = it },
             onDetected = { load(it, true) },
             onBack = { screen = "home"; product = null; error = null; guess = null },
@@ -409,11 +415,20 @@ fun ScoreBadge(score: Int) {
 fun SettingsScreen(onBack: () -> Unit) {
     val pal = LocalPal.current
     val ctx = LocalContext.current
-    var key by remember { mutableStateOf(History.getGroqKey(ctx)) }
+    var groq by remember { mutableStateOf(History.getGroqKey(ctx)) }
+    var nvidia by remember { mutableStateOf(History.getNvidiaKey(ctx)) }
+    var modelo by remember { mutableStateOf(History.getNvidiaModel(ctx)) }
     var guardado by remember { mutableStateOf(false) }
     var probando by remember { mutableStateOf(false) }
     var resultado by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
+
+    fun guardar() {
+        History.setGroqKey(ctx, groq); AiRepo.groqKey = groq
+        History.setNvidiaKey(ctx, nvidia); AiRepo.nvidiaKey = nvidia
+        History.setNvidiaModel(ctx, modelo); AiRepo.nvidiaModel = modelo
+        guardado = true
+    }
 
     Column(Modifier.fillMaxSize().background(pal.fondo)) {
         Row(Modifier.statusBarsPadding().fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -427,31 +442,51 @@ fun SettingsScreen(onBack: () -> Unit) {
                 Text("Analisis con IA", color = pal.tinta, fontSize = 17.sp, fontWeight = FontWeight.Bold)
             }
             Spacer(Modifier.height(8.dp))
-            Text("Sin clave, la app usa un servicio gratuito que a veces se satura. " +
-                 "Con una clave de Groq (gratis y sin tarjeta) el analisis va rapido y sin cortes.",
+            Text("Sin ninguna clave la app usa un servicio gratuito que suele fallar. " +
+                 "Con una clave (basta una de las dos, ambas son gratis y sin tarjeta) el analisis va rapido y fiable.",
                 color = pal.gris, fontSize = 13.sp, lineHeight = 19.sp)
 
+            Spacer(Modifier.height(18.dp))
+            KeyField("Clave de Groq", "gsk_...", groq) { groq = it; guardado = false; resultado = null }
+            Spacer(Modifier.height(6.dp))
+            Text("Rapido y estable. Unas 1.000 consultas al dia.", color = pal.gris, fontSize = 11.sp)
+
             Spacer(Modifier.height(16.dp))
-            OutlinedTextField(
-                value = key,
-                onValueChange = { key = it.trim(); guardado = false; resultado = null },
-                placeholder = { Text("gsk_...", color = pal.gris) },
-                label = { Text("Clave de Groq", color = pal.gris) },
-                singleLine = true, shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth(),
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedTextColor = pal.tinta, unfocusedTextColor = pal.tinta,
-                    focusedBorderColor = pal.acento, unfocusedBorderColor = pal.borde,
-                    cursorColor = pal.acento,
-                    focusedContainerColor = pal.superficie, unfocusedContainerColor = pal.superficie
-                )
-            )
-            Spacer(Modifier.height(12.dp))
+            KeyField("Clave de NVIDIA", "nvapi-...", nvidia) { nvidia = it; guardado = false; resultado = null }
+            Spacer(Modifier.height(6.dp))
+            Text("100+ modelos gratis, con un limite de 40 peticiones por minuto.",
+                color = pal.gris, fontSize = 11.sp)
+
+            if (nvidia.isNotBlank()) {
+                Spacer(Modifier.height(12.dp))
+                Text("Modelo de NVIDIA", color = pal.tinta, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                Spacer(Modifier.height(6.dp))
+                AiRepo.NVIDIA_CATALOG.forEach { (id, etiqueta) ->
+                    val elegido = modelo == id || (modelo.isBlank() && id == AiRepo.NVIDIA_CATALOG.first().first)
+                    Row(
+                        Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
+                            .background(if (elegido) pal.acento.copy(alpha = 0.14f) else pal.superficie)
+                            .clickable { modelo = id; guardado = false; resultado = null }
+                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(if (elegido) Icons.Filled.RadioButtonChecked else Icons.Filled.RadioButtonUnchecked,
+                            null, tint = if (elegido) pal.acento else pal.gris, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(10.dp))
+                        Column {
+                            Text(etiqueta, color = pal.tinta, fontSize = 13.sp,
+                                fontWeight = if (elegido) FontWeight.SemiBold else FontWeight.Normal)
+                            Text(id, color = pal.gris, fontSize = 10.sp)
+                        }
+                    }
+                    Spacer(Modifier.height(4.dp))
+                }
+            }
+
+            Spacer(Modifier.height(16.dp))
             Row {
                 Button(
-                    onClick = {
-                        History.setGroqKey(ctx, key); AiRepo.groqKey = key
-                        guardado = true; resultado = null
-                    },
+                    onClick = { guardar(); resultado = null },
                     modifier = Modifier.weight(1f),
                     colors = ButtonDefaults.buttonColors(containerColor = pal.acento),
                     shape = RoundedCornerShape(14.dp)
@@ -462,13 +497,12 @@ fun SettingsScreen(onBack: () -> Unit) {
                 Spacer(Modifier.width(10.dp))
                 OutlinedButton(
                     onClick = {
-                        History.setGroqKey(ctx, key); AiRepo.groqKey = key
-                        probando = true; resultado = null
+                        guardar(); probando = true; resultado = null
                         scope.launch {
-                            val r = withTimeoutOrNull(40_000L) { AiRepo.test() }
+                            val r = withTimeoutOrNull(45_000L) { AiRepo.test() }
                             resultado = when {
                                 r == null -> "Sin respuesta: ha tardado demasiado."
-                                r.startsWith("OK") -> "Funciona correctamente."
+                                r.startsWith("OK") -> "Funciona. ${r.removePrefix("OK: ").take(60)}"
                                 else -> r
                             }
                             probando = false
@@ -488,52 +522,97 @@ fun SettingsScreen(onBack: () -> Unit) {
                 val ok = r.startsWith("Funciona")
                 Card(colors = CardDefaults.cardColors(containerColor = (if (ok) Bueno else Malo).copy(alpha = 0.14f)),
                     shape = RoundedCornerShape(14.dp), modifier = Modifier.fillMaxWidth()) {
-                    Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Row(Modifier.padding(12.dp)) {
                         Icon(if (ok) Icons.Filled.CheckCircle else Icons.Filled.ErrorOutline, null,
                             tint = if (ok) Bueno else Malo, modifier = Modifier.size(20.dp))
                         Spacer(Modifier.width(10.dp))
-                        Text(r, color = pal.tinta, fontSize = 13.sp, lineHeight = 18.sp)
+                        Text(r, color = pal.tinta, fontSize = 12.sp, lineHeight = 17.sp)
                     }
                 }
             }
 
-            Spacer(Modifier.height(24.dp))
-            Text("Como conseguir la clave (gratis)", color = pal.tinta, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+            Spacer(Modifier.height(26.dp))
+            Text("Como conseguir una clave gratis", color = pal.tinta, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+
+            Spacer(Modifier.height(12.dp))
+            ProviderGuide(
+                titulo = "Groq (recomendado)",
+                pasos = listOf(
+                    "Entra en console.groq.com y crea cuenta.",
+                    "Abre API Keys en el menu lateral.",
+                    "Pulsa Create API Key y copiala (solo se ve una vez).",
+                    "Pegala arriba y pulsa Guardar."
+                ),
+                url = "https://console.groq.com/keys", etiqueta = "Abrir console.groq.com"
+            )
+            Spacer(Modifier.height(18.dp))
+            ProviderGuide(
+                titulo = "NVIDIA Build",
+                pasos = listOf(
+                    "Entra en build.nvidia.com y crea cuenta.",
+                    "Elige un modelo del catalogo (por ejemplo Llama 3.3).",
+                    "Pulsa Get API Key y copiala.",
+                    "Pegala arriba y pulsa Guardar."
+                ),
+                url = "https://build.nvidia.com", etiqueta = "Abrir build.nvidia.com"
+            )
+
+            Spacer(Modifier.height(16.dp))
+            Text("Las claves se guardan solo en tu movil. Si pones las dos, se usa Groq y NVIDIA queda de respaldo.",
+                color = pal.gris, fontSize = 11.sp, lineHeight = 16.sp)
+            Spacer(Modifier.height(30.dp))
+        }
+    }
+}
+
+@Composable
+fun KeyField(etiqueta: String, pista: String, valor: String, onChange: (String) -> Unit) {
+    val pal = LocalPal.current
+    OutlinedTextField(
+        value = valor, onValueChange = { onChange(it.trim()) },
+        placeholder = { Text(pista, color = pal.gris) },
+        label = { Text(etiqueta, color = pal.gris) },
+        singleLine = true, shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth(),
+        colors = OutlinedTextFieldDefaults.colors(
+            focusedTextColor = pal.tinta, unfocusedTextColor = pal.tinta,
+            focusedBorderColor = pal.acento, unfocusedBorderColor = pal.borde, cursorColor = pal.acento,
+            focusedContainerColor = pal.superficie, unfocusedContainerColor = pal.superficie
+        )
+    )
+}
+
+@Composable
+fun ProviderGuide(titulo: String, pasos: List<String>, url: String, etiqueta: String) {
+    val pal = LocalPal.current
+    val ctx = LocalContext.current
+    Card(colors = CardDefaults.cardColors(containerColor = pal.superficie), shape = RoundedCornerShape(16.dp),
+        modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(14.dp)) {
+            Text(titulo, color = pal.tinta, fontWeight = FontWeight.Bold, fontSize = 14.sp)
             Spacer(Modifier.height(8.dp))
-            listOf(
-                "Entra en console.groq.com y crea una cuenta.",
-                "En el menu lateral abre API Keys.",
-                "Pulsa Create API Key y ponle un nombre.",
-                "Copiala en ese momento: solo se muestra una vez.",
-                "Pegala aqui arriba y pulsa Guardar."
-            ).forEachIndexed { i, paso ->
-                Row(Modifier.padding(vertical = 4.dp)) {
-                    Box(Modifier.size(22.dp).clip(CircleShape).background(pal.superficie2), contentAlignment = Alignment.Center) {
-                        Text("${i + 1}", color = pal.acento, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+            pasos.forEachIndexed { i, paso ->
+                Row(Modifier.padding(vertical = 3.dp)) {
+                    Box(Modifier.size(20.dp).clip(CircleShape).background(pal.superficie2), contentAlignment = Alignment.Center) {
+                        Text("${i + 1}", color = pal.acento, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                     }
                     Spacer(Modifier.width(10.dp))
-                    Text(paso, color = pal.gris, fontSize = 13.sp, lineHeight = 19.sp)
+                    Text(paso, color = pal.gris, fontSize = 12.sp, lineHeight = 18.sp)
                 }
             }
-            Spacer(Modifier.height(12.dp))
+            Spacer(Modifier.height(10.dp))
             Button(
                 onClick = {
                     try {
-                        ctx.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW,
-                            android.net.Uri.parse("https://console.groq.com/keys")))
+                        ctx.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(url)))
                     } catch (e: Exception) { }
                 },
-                modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp),
+                modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = pal.superficie2)
             ) {
-                Icon(Icons.Filled.OpenInNew, null, tint = pal.acento, modifier = Modifier.size(16.dp))
+                Icon(Icons.Filled.OpenInNew, null, tint = pal.acento, modifier = Modifier.size(15.dp))
                 Spacer(Modifier.width(8.dp))
-                Text("Abrir console.groq.com", color = pal.tinta)
+                Text(etiqueta, color = pal.tinta, fontSize = 13.sp)
             }
-            Spacer(Modifier.height(12.dp))
-            Text("La clave se guarda solo en tu movil. El plan gratuito permite unas 1.000 consultas al dia.",
-                color = pal.gris, fontSize = 11.sp, lineHeight = 16.sp)
-            Spacer(Modifier.height(30.dp))
         }
     }
 }
@@ -544,6 +623,7 @@ fun ScanScreen(
     sound: Boolean,
     product: Product?, alternatives: List<Alternative>, loading: Boolean, error: String?,
     alerts: List<FoodAlert>, guess: AiRepo.Guess?, guessLoading: Boolean, barcode: String, onAcceptGuess: () -> Unit,
+    onRetry: () -> Unit, onOpenSettings: () -> Unit,
     expanded: Boolean, onExpandedChange: (Boolean) -> Unit,
     onDetected: (String) -> Unit, onBack: () -> Unit, onReset: () -> Unit, onAlternative: (String) -> Unit
 ) {
@@ -666,14 +746,33 @@ fun ScanScreen(
                             Text("Preguntando a la IA por el codigo $barcode...", color = pal.gris, fontSize = 13.sp, textAlign = TextAlign.Center)
                         }
                         guess != null -> GuessCard(guess, barcode, onAcceptGuess, onReset)
-                        error != null -> Column(Modifier.fillMaxWidth().padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                            Icon(Icons.Filled.SearchOff, null, tint = pal.gris, modifier = Modifier.size(44.dp))
+                        error != null -> Column(
+                            Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(20.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Icon(Icons.Filled.SearchOff, null, tint = pal.gris, modifier = Modifier.size(40.dp))
                             Spacer(Modifier.height(10.dp))
-                            Text(error, textAlign = TextAlign.Center, color = pal.tinta, fontSize = 14.sp)
+                            Text(error, textAlign = TextAlign.Center, color = pal.tinta, fontSize = 13.sp, lineHeight = 18.sp)
                             Spacer(Modifier.height(16.dp))
-                            Button(onClick = onReset, colors = ButtonDefaults.buttonColors(containerColor = pal.acento),
-                                shape = RoundedCornerShape(14.dp)) {
-                                Text("Escanear otro", color = if (pal == DarkPal) Bosque else Color.White)
+                            Row {
+                                OutlinedButton(onClick = onRetry, shape = RoundedCornerShape(14.dp),
+                                    border = androidx.compose.foundation.BorderStroke(1.dp, pal.borde)) {
+                                    Icon(Icons.Filled.Refresh, null, tint = pal.tinta, modifier = Modifier.size(16.dp))
+                                    Spacer(Modifier.width(6.dp)); Text("Reintentar", color = pal.tinta, fontSize = 13.sp)
+                                }
+                                Spacer(Modifier.width(8.dp))
+                                Button(onClick = onReset, colors = ButtonDefaults.buttonColors(containerColor = pal.acento),
+                                    shape = RoundedCornerShape(14.dp)) {
+                                    Text("Escanear otro", color = if (pal == DarkPal) Bosque else Color.White, fontSize = 13.sp)
+                                }
+                            }
+                            if (AiRepo.groqKey.isBlank() && AiRepo.nvidiaKey.isBlank()) {
+                                Spacer(Modifier.height(12.dp))
+                                TextButton(onClick = onOpenSettings) {
+                                    Icon(Icons.Filled.AutoAwesome, null, tint = pal.acento, modifier = Modifier.size(15.dp))
+                                    Spacer(Modifier.width(6.dp))
+                                    Text("Configurar IA (gratis)", color = pal.acento, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                                }
                             }
                         }
                         product != null -> {

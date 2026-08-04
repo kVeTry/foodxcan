@@ -19,23 +19,43 @@ object AiRepo {
     // Clave de Pollinations (respaldo gratuito sin registro)
     private const val POLLI_TOKEN = "sk_ZhE6E7VeR6hHdut0gVXvDEszN4H5QgqJ"
 
-    // Clave de Groq del usuario. Se rellena al abrir la app desde los ajustes.
+    // Claves del usuario, cargadas al abrir la app desde los ajustes
     @Volatile var groqKey: String = ""
+    @Volatile var nvidiaKey: String = ""
+    /** Modelo de NVIDIA elegido en Ajustes. Vacio = el recomendado. */
+    @Volatile var nvidiaModel: String = ""
+
+    /** Modelos de NVIDIA recomendados para esta app, de mejor a mas ligero. */
+    val NVIDIA_CATALOG = listOf(
+        "meta/llama-3.3-70b-instruct" to "Llama 3.3 70B (recomendado)",
+        "nvidia/llama-3.3-nemotron-super-49b-v1" to "Nemotron Super 49B",
+        "qwen/qwen2.5-72b-instruct" to "Qwen 2.5 72B",
+        "openai/gpt-oss-120b" to "GPT-OSS 120B",
+        "meta/llama-3.1-8b-instruct" to "Llama 3.1 8B (mas rapido)"
+    )
 
     private const val GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
-    // Los nombres de modelo cambian con el tiempo: se prueban en orden
     private val GROQ_MODELS = listOf(
         "llama-3.3-70b-versatile",
         "llama-3.1-8b-instant",
         "openai/gpt-oss-120b"
     )
 
+    // NVIDIA Build (NIM): compatible con OpenAI, gratis con cuenta de desarrollador
+    private const val NVIDIA_URL = "https://integrate.api.nvidia.com/v1/chat/completions"
+    /** El modelo elegido va primero; el resto quedan de respaldo si desaparece. */
+    private fun nvidiaModels(): List<String> {
+        val base = NVIDIA_CATALOG.map { it.first }
+        return if (nvidiaModel.isBlank()) base
+        else listOf(nvidiaModel) + base.filter { it != nvidiaModel }
+    }
+
     private data class Provider(val url: String, val token: String, val models: List<String>, val name: String)
 
     private fun providers(): List<Provider> = buildList {
-        // Groq primero: es rapido y estable si hay clave
+        // Groq primero por velocidad; NVIDIA despues; Pollinations como ultimo recurso
         if (groqKey.isNotBlank()) add(Provider(GROQ_URL, groqKey, GROQ_MODELS, "Groq"))
-        // Pollinations como respaldo gratuito
+        if (nvidiaKey.isNotBlank()) add(Provider(NVIDIA_URL, nvidiaKey, nvidiaModels(), "NVIDIA"))
         add(Provider("https://text.pollinations.ai/openai", POLLI_TOKEN, listOf("mistral", "openai-fast"), "Pollinations"))
         add(Provider("https://gen.pollinations.ai/v1/chat/completions", POLLI_TOKEN, listOf("mistral"), "Pollinations"))
     }
@@ -78,41 +98,57 @@ object AiRepo {
         }
     }
 
-    private fun ask(prompt: String, maxTokens: Int = 900): Result {
-        var saturado = false; var sinRed = false; var claveMal = false
-        var ultimo = ""
+    /** Ultimo diagnostico tecnico, para mostrarlo si algo falla. */
+    @Volatile var lastDiagnostic: String = ""
 
-        repeat(2) { intento ->
-            for (p in providers()) {
+    private fun ask(prompt: String, maxTokens: Int = 900): Result {
+        var saturado = false; var sinRed = false; var claveMal = false; var sinCreditos = false
+        val log = mutableListOf<String>()
+        val provs = providers()
+        if (provs.isEmpty()) return Result.Error("No hay ningun servicio de IA configurado.")
+
+        for (intento in 0 until 2) {
+            for (p in provs) {
                 for (m in p.models) {
                     val (text, err) = postOnce(p, m, prompt, maxTokens)
-                    if (text != null) return Result.Ok(text)
-                    ultimo = err
+                    if (text != null) {
+                        lastDiagnostic = "OK con ${p.name} / $m"
+                        return Result.Ok(text)
+                    }
+                    log.add("${p.name}/$m: $err")
                     when {
                         err.contains("429") -> saturado = true
-                        err.contains("401") || err.contains("403") -> if (p.name == "Groq") claveMal = true
+                        err.contains("401") || err.contains("403") ->
+                            if (p.name == "Groq" || p.name == "NVIDIA") claveMal = true
+                        err.contains("402") -> if (p.name == "NVIDIA") sinCreditos = true
                         err.contains("resolve host", true) || err.contains("Unable to resolve", true) ||
-                        err.contains("timeout", true) || err.contains("timed out", true) -> sinRed = true
+                        err.contains("timeout", true) || err.contains("timed out", true) ||
+                        err.contains("failed to connect", true) -> sinRed = true
                     }
                 }
             }
-            if (intento == 0) try { Thread.sleep(3000) } catch (e: InterruptedException) { }
+            // Reintentar solo tiene sentido si fue saturacion pasajera
+            if (!saturado) break
+            try { Thread.sleep(3000) } catch (e: InterruptedException) { }
         }
 
-        return Result.Error(
-            when {
-                claveMal -> "La clave de Groq no es valida. Revisala en Ajustes."
-                saturado -> "Limite de peticiones alcanzado. Espera un minuto y vuelve a intentarlo."
-                sinRed -> "No hay conexion con el servicio de IA. Comprueba tu internet."
-                else -> "El servicio de IA no responde ($ultimo)."
-            }
-        )
+        lastDiagnostic = log.distinct().joinToString(" | ").take(400)
+        val base = when {
+            claveMal -> "La clave de IA no es valida. Revisala en Ajustes."
+            sinCreditos -> "El modelo de NVIDIA elegido no esta disponible con tu cuenta. Prueba otro modelo en Ajustes."
+            saturado -> "Limite de peticiones alcanzado. Espera un minuto."
+            sinRed -> "Sin conexion con el servicio de IA. Comprueba tu internet."
+            provs.none { it.name == "Groq" || it.name == "NVIDIA" } ->
+                "El servicio gratuito de IA no responde. Anade una clave de Groq o de NVIDIA en Ajustes (son gratis) para que funcione de forma fiable."
+            else -> "El servicio de IA no responde."
+        }
+        return Result.Error("$base\n\nDetalle: $lastDiagnostic")
     }
 
     /** Comprueba que la IA responde. Devuelve "OK ..." o el motivo del fallo. */
     suspend fun test(): String = withContext(Dispatchers.IO) {
         when (val r = ask("Responde unicamente con la palabra: correcto", 20)) {
-            is Result.Ok -> "OK: ${r.text.take(40)}"
+            is Result.Ok -> "OK: $lastDiagnostic"
             is Result.Error -> r.message
         }
     }

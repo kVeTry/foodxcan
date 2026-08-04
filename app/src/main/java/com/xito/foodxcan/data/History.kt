@@ -63,6 +63,14 @@ object History {
     fun getGroqKey(ctx: Context) = prefs(ctx).getString("groq_key", "") ?: ""
     fun setGroqKey(ctx: Context, v: String) = prefs(ctx).edit().putString("groq_key", v).apply()
 
+    // Clave de NVIDIA Build (NIM)
+    fun getNvidiaKey(ctx: Context) = prefs(ctx).getString("nvidia_key", "") ?: ""
+    fun setNvidiaKey(ctx: Context, v: String) = prefs(ctx).edit().putString("nvidia_key", v).apply()
+
+    // Modelo de NVIDIA elegido
+    fun getNvidiaModel(ctx: Context) = prefs(ctx).getString("nvidia_model", "") ?: ""
+    fun setNvidiaModel(ctx: Context, v: String) = prefs(ctx).edit().putString("nvidia_model", v).apply()
+
     // Sonido al escanear
     fun isSound(ctx: Context) = prefs(ctx).getBoolean("sound", true)
     fun setSound(ctx: Context, v: Boolean) = prefs(ctx).edit().putBoolean("sound", v).apply()

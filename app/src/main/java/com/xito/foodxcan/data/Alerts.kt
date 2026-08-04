@@ -2,7 +2,6 @@ package com.xito.foodxcan.data
 
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -51,7 +50,8 @@ object Alerts {
 
     @Volatile private var listCache: List<FoodAlert>? = null
     @Volatile private var listTime = 0L
-    private val detailCache = mutableMapOf<String, FoodAlert>()
+    // Concurrente: varias corrutinas leen y escriben a la vez al abrir fichas en paralelo
+    private val detailCache = java.util.concurrent.ConcurrentHashMap<String, FoodAlert>()
 
     private fun norm(s: String): String =
         Normalizer.normalize(s.lowercase(), Normalizer.Form.NFD)
@@ -191,13 +191,13 @@ object Alerts {
     private fun foodOverlap(prodWords: Set<String>, alertWords: Set<String>): Int =
         prodWords.count { w -> w in FOOD_TERMS && alertWords.any { k -> k == w || k.startsWith(w.take(5)) } }
 
-    suspend fun matchFor(p: Product): List<FoodAlert> = coroutineScope {
+    suspend fun matchFor(p: Product): List<FoodAlert> = withContext(Dispatchers.IO) {
         val listing = loadListing()
-        if (listing.isEmpty()) return@coroutineScope emptyList()
+        if (listing.isEmpty()) return@withContext emptyList()
 
         val prodWords = sig(listOfNotNull(p.name, p.categoryName).joinToString(" "))
         val brandNorm = norm(p.brand)
-        if (prodWords.isEmpty() && brandNorm.isBlank()) return@coroutineScope emptyList()
+        if (prodWords.isEmpty() && brandNorm.isBlank()) return@withContext emptyList()
 
         // 1) Preseleccion: la alerta debe mencionar un alimento concreto del producto
         val candidates = listing.mapNotNull { a ->
@@ -205,7 +205,7 @@ object Alerts {
             val food = foodOverlap(prodWords, keys)
             if (food >= 1) a to food else null
         }.sortedByDescending { it.second }.take(10).map { it.first }
-        if (candidates.isEmpty()) return@coroutineScope emptyList()
+        if (candidates.isEmpty()) return@withContext emptyList()
 
         // 2) Se abren las fichas para leer marca, nombre exacto y lote
         val details = candidates.map { async(Dispatchers.IO) { fetchDetail(it) } }.map { it.await() }

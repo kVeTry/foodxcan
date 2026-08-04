@@ -29,6 +29,7 @@ class ScanGate {
     private var acceptedAt = 0L
 
     /** Devuelve true solo cuando hay que lanzar la busqueda de ese codigo. */
+    @Synchronized
     fun offer(code: String, cooldownMs: Long = 4000L): Boolean {
         // Confirmacion: el mismo codigo debe leerse 3 veces seguidas
         if (code == candidate) repeats++ else { candidate = code; repeats = 1 }
@@ -45,6 +46,7 @@ class ScanGate {
         return true
     }
 
+    @Synchronized
     fun reset() {
         candidate = null; repeats = 0; acceptedCode = null; acceptedAt = 0L
     }

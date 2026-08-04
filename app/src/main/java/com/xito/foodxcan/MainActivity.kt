@@ -159,7 +159,7 @@ fun App(dark: Boolean, onToggleDark: (Boolean) -> Unit) {
             if (p == null) {
                 loading = false
                 guessLoading = true
-                val res = withTimeoutOrNull(100_000L) { AiRepo.identify(code) }
+                val res = withTimeoutOrNull(160_000L) { AiRepo.identify(code) }
                 guessLoading = false
                 val g = res?.first
                 val err = res?.second ?: "La IA ha tardado demasiado en responder."
@@ -499,7 +499,7 @@ fun SettingsScreen(onBack: () -> Unit) {
                     onClick = {
                         guardar(); probando = true; resultado = null
                         scope.launch {
-                            val r = withTimeoutOrNull(45_000L) { AiRepo.test() }
+                            val r = withTimeoutOrNull(110_000L) { AiRepo.test() }
                             resultado = when {
                                 r == null -> "Sin respuesta: ha tardado demasiado."
                                 r.startsWith("OK") -> "Funciona. ${r.removePrefix("OK: ").take(60)}"
@@ -512,8 +512,13 @@ fun SettingsScreen(onBack: () -> Unit) {
                     border = androidx.compose.foundation.BorderStroke(1.dp, pal.borde)
                 ) {
                     if (probando) {
+                        var seg by remember(probando) { mutableStateOf(0) }
+                        LaunchedEffect(probando) {
+                            while (true) { kotlinx.coroutines.delay(1000); seg++ }
+                        }
                         CircularProgressIndicator(color = pal.acento, strokeWidth = 2.dp, modifier = Modifier.size(16.dp))
-                        Spacer(Modifier.width(8.dp)); Text("Probando", color = pal.tinta)
+                        Spacer(Modifier.width(8.dp))
+                        Text(if (seg < 5) "Probando" else "${seg}s", color = pal.tinta)
                     } else Text("Probar", color = pal.tinta)
                 }
             }
@@ -740,10 +745,20 @@ fun ScanScreen(
                             Spacer(Modifier.height(14.dp)); Text("Analizando producto...", color = pal.gris)
                         }
                         guessLoading -> Column(Modifier.fillMaxWidth().padding(26.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                            var seg by remember(guessLoading) { mutableStateOf(0) }
+                            LaunchedEffect(guessLoading) {
+                                while (true) { kotlinx.coroutines.delay(1000); seg++ }
+                            }
                             CircularProgressIndicator(color = pal.acento)
                             Spacer(Modifier.height(14.dp))
                             Text("No esta en la base de datos", color = pal.tinta, fontWeight = FontWeight.SemiBold)
-                            Text("Preguntando a la IA por el codigo $barcode...", color = pal.gris, fontSize = 13.sp, textAlign = TextAlign.Center)
+                            Text("Preguntando a la IA por el codigo $barcode.\nPuede tardar hasta un minuto.",
+                                color = pal.gris, fontSize = 13.sp, textAlign = TextAlign.Center, lineHeight = 18.sp)
+                            if (seg >= 8) {
+                                Spacer(Modifier.height(6.dp))
+                                Text("${seg}s · algunos modelos tardan cerca de un minuto",
+                                    color = pal.gris, fontSize = 11.sp, textAlign = TextAlign.Center)
+                            }
                         }
                         guess != null -> GuessCard(guess, barcode, onAcceptGuess, onReset)
                         error != null -> Column(
@@ -1037,7 +1052,7 @@ fun ProductDetail(p: Product, alternatives: List<Alternative>, alerts: List<Food
                     onClick = {
                         aiLoading = true; aiState = null
                         scope.launch {
-                            aiState = withTimeoutOrNull(120_000L) { AiRepo.analyze(p) }
+                            aiState = withTimeoutOrNull(180_000L) { AiRepo.analyze(p) }
                                 ?: AiRepo.Result.Error("La IA ha tardado demasiado. Intentalo de nuevo.")
                             aiLoading = false
                         }
@@ -1048,8 +1063,13 @@ fun ProductDetail(p: Product, alternatives: List<Alternative>, alerts: List<Food
                 ) {
                     val txtColor = if (pal == DarkPal) Bosque else Color.White
                     if (aiLoading) {
+                        var seg by remember(aiLoading) { mutableStateOf(0) }
+                        LaunchedEffect(aiLoading) {
+                            while (true) { kotlinx.coroutines.delay(1000); seg++ }
+                        }
                         CircularProgressIndicator(color = txtColor, strokeWidth = 2.dp, modifier = Modifier.size(18.dp))
-                        Spacer(Modifier.width(10.dp)); Text("Analizando, puede tardar...", color = pal.tinta)
+                        Spacer(Modifier.width(10.dp))
+                        Text(if (seg < 8) "Analizando..." else "Analizando... ${seg}s (hasta 1 min)", color = pal.tinta)
                     } else {
                         Icon(Icons.Filled.AutoAwesome, null, tint = txtColor, modifier = Modifier.size(20.dp))
                         Spacer(Modifier.width(10.dp)); Text("Analisis con IA", color = txtColor, fontWeight = FontWeight.SemiBold)
@@ -1086,7 +1106,7 @@ fun ProductDetail(p: Product, alternatives: List<Alternative>, alerts: List<Food
                                                 onClick = {
                                                     aiLoading = true; aiState = null
                                                     scope.launch {
-                                                        aiState = withTimeoutOrNull(120_000L) { AiRepo.analyze(p) }
+                                                        aiState = withTimeoutOrNull(180_000L) { AiRepo.analyze(p) }
                                                             ?: AiRepo.Result.Error("La IA ha tardado demasiado. Intentalo de nuevo.")
                                                         aiLoading = false
                                                     }

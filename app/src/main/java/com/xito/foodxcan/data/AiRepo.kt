@@ -12,8 +12,10 @@ import java.util.concurrent.TimeUnit
 
 object AiRepo {
     private val http = OkHttpClient.Builder()
-        .connectTimeout(8, TimeUnit.SECONDS)
-        .readTimeout(35, TimeUnit.SECONDS)
+        .connectTimeout(15, TimeUnit.SECONDS)
+        .readTimeout(75, TimeUnit.SECONDS)      // NVIDIA puede acercarse al minuto
+        .writeTimeout(30, TimeUnit.SECONDS)
+        .callTimeout(95, TimeUnit.SECONDS)      // tope duro por peticion
         .build()
 
     // Clave de Pollinations (respaldo gratuito sin registro)
@@ -46,8 +48,10 @@ object AiRepo {
     /** El modelo elegido va primero; el resto quedan de respaldo si desaparece. */
     private fun nvidiaModels(): List<String> {
         val base = NVIDIA_CATALOG.map { it.first }
-        return if (nvidiaModel.isBlank()) base
-        else listOf(nvidiaModel) + base.filter { it != nvidiaModel }
+        val ordenados = if (nvidiaModel.isBlank()) base
+                        else listOf(nvidiaModel) + base.filter { it != nvidiaModel }
+        // NVIDIA puede tardar cerca de un minuto por peticion: no encadenamos muchos
+        return ordenados.take(3)
     }
 
     private data class Provider(val url: String, val token: String, val models: List<String>, val name: String)

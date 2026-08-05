@@ -159,7 +159,7 @@ fun App(dark: Boolean, onToggleDark: (Boolean) -> Unit) {
             if (p == null) {
                 loading = false
                 guessLoading = true
-                val res = withTimeoutOrNull(160_000L) { AiRepo.identify(code) }
+                val res = withTimeoutOrNull(220_000L) { AiRepo.identify(code) }
                 guessLoading = false
                 val g = res?.first
                 val err = res?.second ?: "La IA ha tardado demasiado en responder."
@@ -1052,7 +1052,7 @@ fun ProductDetail(p: Product, alternatives: List<Alternative>, alerts: List<Food
                     onClick = {
                         aiLoading = true; aiState = null
                         scope.launch {
-                            aiState = withTimeoutOrNull(180_000L) { AiRepo.analyze(p) }
+                            aiState = withTimeoutOrNull(240_000L) { AiRepo.analyze(p) }
                                 ?: AiRepo.Result.Error("La IA ha tardado demasiado. Intentalo de nuevo.")
                             aiLoading = false
                         }
@@ -1106,7 +1106,7 @@ fun ProductDetail(p: Product, alternatives: List<Alternative>, alerts: List<Food
                                                 onClick = {
                                                     aiLoading = true; aiState = null
                                                     scope.launch {
-                                                        aiState = withTimeoutOrNull(180_000L) { AiRepo.analyze(p) }
+                                                        aiState = withTimeoutOrNull(240_000L) { AiRepo.analyze(p) }
                                                             ?: AiRepo.Result.Error("La IA ha tardado demasiado. Intentalo de nuevo.")
                                                         aiLoading = false
                                                     }

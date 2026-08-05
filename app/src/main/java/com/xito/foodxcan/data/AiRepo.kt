@@ -13,9 +13,9 @@ import java.util.concurrent.TimeUnit
 object AiRepo {
     private val http = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
-        .readTimeout(75, TimeUnit.SECONDS)      // NVIDIA puede acercarse al minuto
+        .readTimeout(90, TimeUnit.SECONDS)      // NVIDIA puede acercarse al minuto
         .writeTimeout(30, TimeUnit.SECONDS)
-        .callTimeout(95, TimeUnit.SECONDS)      // tope duro por peticion
+        .callTimeout(115, TimeUnit.SECONDS)      // tope duro por peticion
         .build()
 
     // Clave de Pollinations (respaldo gratuito sin registro)
